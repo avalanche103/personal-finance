@@ -1,0 +1,28 @@
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Country</th>
+                <th>Base currency</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for institution in institutions %}
+                <tr>
+                    <td>{{ institution.name }}</td>
+                    <td>{{ institution.get_institution_type_display }}</td>
+                    <td>{{ institution.country }}</td>
+                    <td>{{ institution.base_currency.code|default:'-' }}</td>
+                    <td>{% if institution.is_active %}Active{% else %}Inactive{% endif %}</td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="5" class="empty-state">No institutions found.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

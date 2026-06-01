@@ -1,0 +1,154 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Portfolio Report | {{ project_name }}{% endblock %}
+{% block page_title %}Portfolio Report{% endblock %}
+
+{% block content %}
+<section class="stack-lg">
+    <section class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Historical view</p>
+                <h2>Portfolio as of date</h2>
+            </div>
+        </div>
+
+        <form class="filter-bar" method="get">
+            <label class="filter-field">
+                <span>As of date</span>
+                <input type="date" name="as_of" value="{{ as_of_date|date:'Y-m-d' }}">
+            </label>
+            <button type="submit" class="button">Build report</button>
+        </form>
+
+        <section class="metric-grid compact-grid">
+            <article class="metric-card accent-gold">
+                <span>Portfolio total</span>
+                <strong>${{ portfolio_usd|floatformat:2 }}</strong>
+                <small>As of {{ as_of_date|date:'Y-m-d' }}</small>
+            </article>
+            <article class="metric-card accent-blue">
+                <span>Accounts total</span>
+                <strong>${{ accounts_total_usd|floatformat:2 }}</strong>
+                <small>Cash and account balances converted to USD</small>
+            </article>
+            <article class="metric-card accent-green">
+                <span>Products total</span>
+                <strong>${{ products_total_usd|floatformat:2 }}</strong>
+                <small>Units times current price in USD terms</small>
+            </article>
+        </section>
+
+        {% if latest_snapshot %}
+            <p class="muted">Latest snapshot used in report window: {{ latest_snapshot.captured_at|date:'Y-m-d H:i' }}</p>
+        {% else %}
+            <p class="muted">No historical snapshots found yet. The report falls back to current balances and current product units.</p>
+        {% endif %}
+    </section>
+
+    <section class="grid-two">
+        <article class="panel stack-md">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Institutions</p>
+                    <h2>Allocation by institution</h2>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Institution</th>
+                            <th class="text-right">Accounts USD</th>
+                            <th class="text-right">Products USD</th>
+                            <th class="text-right">Total USD</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in institution_rows %}
+                            <tr>
+                                <td>{{ row.institution.name }}</td>
+                                <td class="text-right">{{ row.accounts_usd|floatformat:2 }}</td>
+                                <td class="text-right">{{ row.products_usd|floatformat:2 }}</td>
+                                <td class="text-right">{{ row.total_usd|floatformat:2 }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="4" class="empty-state">No institutions to report yet.</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </article>
+
+        <article class="panel stack-md">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Accounts</p>
+                    <h2>Top account balances</h2>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Account</th>
+                            <th>Institution</th>
+                            <th class="text-right">Value USD</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in account_rows %}
+                            <tr>
+                                <td>{{ row.account.name }}</td>
+                                <td>{{ row.account.institution.name }}</td>
+                                <td class="text-right">{{ row.value_usd|floatformat:2 }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="3" class="empty-state">No accounts available.</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </article>
+    </section>
+
+    <section class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Products</p>
+                <h2>Top products</h2>
+            </div>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Product</th>
+                        <th>Institution</th>
+                        <th>Currency</th>
+                        <th class="text-right">Value USD</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in product_rows %}
+                        <tr>
+                            <td>{{ row.product.name }}</td>
+                            <td>{{ row.product.institution.name }}</td>
+                            <td>{{ row.product.currency.code }}</td>
+                            <td class="text-right">{{ row.value_usd|floatformat:2 }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="4" class="empty-state">No products available.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</section>
+{% endblock %}

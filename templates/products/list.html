@@ -1,0 +1,24 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Products | {{ project_name }}{% endblock %}
+{% block page_title %}Products{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Assets</p>
+            <h2>Products list</h2>
+        </div>
+        <a class="button" href="/admin/products/product/add/">Add product</a>
+    </div>
+
+    <form class="filter-bar" hx-get="{% url 'products:list' %}" hx-target="#product-table" hx-trigger="keyup changed delay:300ms from:#product-search">
+        <input id="product-search" type="search" name="q" value="{{ query }}" placeholder="Search by name, symbol, ISIN or institution">
+    </form>
+
+    <div id="product-table">
+        {% include 'products/partials/table.html' %}
+    </div>
+</section>
+{% endblock %}

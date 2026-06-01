@@ -1,0 +1,24 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Accounts | {{ project_name }}{% endblock %}
+{% block page_title %}Accounts{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Ledger</p>
+            <h2>Accounts list</h2>
+        </div>
+        <a class="button" href="/admin/accounts/account/add/">Add account</a>
+    </div>
+
+    <form class="filter-bar" hx-get="{% url 'accounts:list' %}" hx-target="#account-table" hx-trigger="keyup changed delay:300ms from:#account-search">
+        <input id="account-search" type="search" name="q" value="{{ query }}" placeholder="Search by account, institution, type or currency">
+    </form>
+
+    <div id="account-table">
+        {% include 'accounts/partials/table.html' %}
+    </div>
+</section>
+{% endblock %}

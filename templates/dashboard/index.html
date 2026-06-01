@@ -1,0 +1,148 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Dashboard | {{ project_name }}{% endblock %}
+{% block page_title %}Financial Overview{% endblock %}
+
+{% block content %}
+<section class="stack-lg">
+    <div id="summary-cards" hx-get="{% url 'dashboard:summary' %}" hx-trigger="load, every 60s">
+        {% include 'dashboard/partials/summary_cards.html' %}
+    </div>
+
+    <section class="grid-two">
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Institutions</p>
+                    <h2>Current map</h2>
+                </div>
+                <a href="{% url 'institutions:list' %}">View all</a>
+            </div>
+            <div class="mini-list">
+                {% for institution in institutions %}
+                    <div class="mini-list-item">
+                        <div>
+                            <strong>{{ institution.name }}</strong>
+                            <span>{{ institution.get_institution_type_display }} · {{ institution.country }}</span>
+                        </div>
+                        <span>{{ institution.accounts.count }} accounts</span>
+                    </div>
+                {% empty %}
+                    <p class="empty-state">No institutions yet. Add them through admin or imports.</p>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Imports</p>
+                    <h2>Recent activity</h2>
+                </div>
+                <a href="{% url 'imports:history' %}">View history</a>
+            </div>
+            <div id="recent-imports" hx-get="{% url 'dashboard:recent_imports' %}" hx-trigger="load, every 60s">
+                {% include 'dashboard/partials/recent_imports.html' %}
+            </div>
+        </article>
+    </section>
+
+    <section class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">FX Monitor</p>
+                <h2>Latest NBRB rates</h2>
+            </div>
+            <a href="{% url 'dashboard:exchange_rates' %}">Open full history</a>
+        </div>
+        <div id="latest-rates" hx-get="{% url 'dashboard:latest_rates' %}" hx-trigger="load, every 3600s">
+            {% include 'dashboard/partials/latest_rates.html' %}
+        </div>
+    </section>
+
+    <section class="grid-two">
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Accounts</p>
+                    <h2>Latest balances</h2>
+                </div>
+                <a href="{% url 'accounts:list' %}">Manage accounts</a>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Account</th>
+                            <th>Institution</th>
+                            <th>Currency</th>
+                            <th class="text-right">Balance USD</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for account in accounts %}
+                            <tr>
+                                <td>{{ account.name }}</td>
+                                <td>{{ account.institution.name }}</td>
+                                <td>{{ account.currency.code }}</td>
+                                <td class="text-right">{{ account.current_balance_usd|floatformat:2 }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="4" class="empty-state">No accounts yet.</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </article>
+
+        <article class="panel">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Products</p>
+                    <h2>Tracked assets</h2>
+                </div>
+                <a href="{% url 'products:list' %}">Manage products</a>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Institution</th>
+                            <th>Type</th>
+                            <th class="text-right">Value USD</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for product in products %}
+                            <tr>
+                                <td>{{ product.name }}</td>
+                                <td>{{ product.institution.name }}</td>
+                                <td>{{ product.get_product_type_display }}</td>
+                                <td class="text-right">{{ product.current_value_usd|floatformat:2 }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="4" class="empty-state">No products yet.</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </article>
+    </section>
+
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Historical reporting</p>
+                <h2>Portfolio report by date</h2>
+            </div>
+            <a href="{% url 'dashboard:portfolio_report' %}">Open report</a>
+        </div>
+        <p class="muted">Use the report page to inspect portfolio value, institutions, accounts and products for a selected date.</p>
+    </section>
+</section>
+{% endblock %}

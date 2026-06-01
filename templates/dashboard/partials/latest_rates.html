@@ -1,0 +1,19 @@
+<section class="metric-grid compact-grid">
+    {% for card in latest_rate_cards %}
+        <article class="metric-card accent-gold">
+            <span>{{ card.code }}</span>
+            <strong>{{ card.display_rate_byn|floatformat:4 }} BYN</strong>
+            <small>{{ card.latest.rate_date|date:'Y-m-d' }}</small>
+            <small>per {{ card.latest.scale }} {{ card.code }}</small>
+            {% if card.change_byn is not None %}
+                <small class="{% if card.change_byn > 0 %}delta-up{% elif card.change_byn < 0 %}delta-down{% else %}muted{% endif %}">
+                    {{ card.display_change_byn|floatformat:4 }} BYN · {{ card.change_pct|floatformat:2 }}%
+                </small>
+            {% else %}
+                <small class="muted">No previous day loaded yet.</small>
+            {% endif %}
+        </article>
+    {% empty %}
+        <p class="empty-state">No rate cards available yet.</p>
+    {% endfor %}
+</section>

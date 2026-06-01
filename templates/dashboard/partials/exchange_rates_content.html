@@ -1,0 +1,44 @@
+{{ chart_series|json_script:'exchange-rate-chart-data' }}
+
+<section class="metric-grid compact-grid">
+    {% for item in latest_rows %}
+        <article class="metric-card accent-blue">
+            <span>{{ item.row.currency.code }}</span>
+            <strong>{{ item.row.usd_cross_rate|floatformat:6 }} USD</strong>
+            <small>{{ item.row.rate_date }} · {{ item.display_rate_byn|floatformat:4 }} BYN per {{ item.display_scale }} {{ item.row.currency.code }}</small>
+        </article>
+    {% endfor %}
+</section>
+
+<div class="chart-card">
+    <canvas id="exchange-rate-chart"></canvas>
+</div>
+
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Currency</th>
+                    <th class="text-right">BYN rate</th>
+                <th class="text-right">USD per unit</th>
+                <th class="text-right">Scale</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rate_rows %}
+                <tr>
+                    <td>{{ row.rate_date|date:'Y-m-d' }}</td>
+                    <td>{{ row.currency.code }}</td>
+                    <td class="text-right">{{ row.payload.Cur_OfficialRate|default:row.rate_byn|floatformat:4 }}</td>
+                    <td class="text-right">{{ row.usd_cross_rate|floatformat:6 }}</td>
+                    <td class="text-right">{{ row.scale }}</td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="5" class="empty-state">No exchange rate history found.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

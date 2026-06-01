@@ -1,0 +1,81 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Exchange Rates | {{ project_name }}{% endblock %}
+{% block page_title %}Exchange Rates{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">NBRB API</p>
+            <h2>USD, EUR and RUB history</h2>
+        </div>
+    </div>
+
+    <form class="filter-bar" hx-get="{% url 'dashboard:exchange_rates' %}" hx-target="#exchange-rates-content" hx-select="#exchange-rates-content" hx-trigger="change from:#period-filter">
+        <label class="filter-field">
+            <span>Period</span>
+            <select id="period-filter" name="period">
+                {% for value, label in period_options %}
+                    <option value="{{ value }}" {% if period == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </form>
+
+    <div id="exchange-rates-content">
+        {% include 'dashboard/partials/exchange_rates_content.html' %}
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function renderExchangeRateChart() {
+    const payloadNode = document.getElementById('exchange-rate-chart-data');
+    const canvas = document.getElementById('exchange-rate-chart');
+    if (!payloadNode || !canvas || typeof Chart === 'undefined') {
+        return;
+    }
+
+    const payload = JSON.parse(payloadNode.textContent);
+    if (window.exchangeRateChart) {
+        window.exchangeRateChart.destroy();
+    }
+
+    window.exchangeRateChart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            datasets: [
+                {label: 'USD', data: payload.USD, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,0.15)', tension: 0.25},
+                {label: 'EUR', data: payload.EUR, borderColor: '#b7791f', backgroundColor: 'rgba(183,121,31,0.15)', tension: 0.25},
+                {label: 'RUB', data: payload.RUB, borderColor: '#285e61', backgroundColor: 'rgba(40,94,97,0.15)', tension: 0.25},
+            ],
+        },
+        options: {
+            parsing: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {type: 'category', ticks: {maxTicksLimit: 12}},
+                y: {title: {display: true, text: 'USD per unit'}}
+            },
+            plugins: {
+                legend: {position: 'bottom'}
+            }
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', renderExchangeRateChart);
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    if (event.target && event.target.id === 'exchange-rates-content') {
+        renderExchangeRateChart();
+    }
+});
+</script>
+{% endblock %}

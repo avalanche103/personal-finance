@@ -1,0 +1,33 @@
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Institution</th>
+                <th>Type</th>
+                <th>Currency</th>
+                <th class="text-right">Units</th>
+                <th class="text-right">Value USD</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for product in products %}
+                <tr>
+                    <td>
+                        <strong>{{ product.name }}</strong>
+                        {% if product.symbol %}<div class="muted">{{ product.symbol }}</div>{% endif %}
+                    </td>
+                    <td>{{ product.institution.name }}</td>
+                    <td>{{ product.get_product_type_display }}</td>
+                    <td>{{ product.currency.code }}</td>
+                    <td class="text-right">{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</td>
+                    <td class="text-right">{{ product.current_value_usd|floatformat:2 }}</td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="6" class="empty-state">No products found.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

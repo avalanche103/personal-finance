@@ -1,0 +1,40 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Import Upload | {{ project_name }}{% endblock %}
+{% block page_title %}Import Upload{% endblock %}
+
+{% block content %}
+<section class="grid-two">
+    <article class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Pipeline</p>
+                <h2>Upload raw file</h2>
+            </div>
+        </div>
+
+        <form method="post" enctype="multipart/form-data" class="stack-md">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button type="submit" class="button">Create import job</button>
+        </form>
+
+        <div class="note-card">
+            <strong>Supported now</strong>
+            <p>XLS/XLSX preview via pandas/openpyxl, PDF preview layer via pypdf, API integrations as adapters, manual review before save for complex statements.</p>
+        </div>
+    </article>
+
+    <article class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Latest jobs</p>
+                <h2>Recent uploads</h2>
+            </div>
+            <a href="{% url 'imports:history' %}">Open history</a>
+        </div>
+
+        {% include 'imports/partials/history_table.html' with jobs=recent_jobs %}
+    </article>
+</section>
+{% endblock %}

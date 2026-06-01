@@ -1,0 +1,20 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Import History | {{ project_name }}{% endblock %}
+{% block page_title %}Import History{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Audit trail</p>
+            <h2>All import jobs</h2>
+        </div>
+        <a class="button" href="{% url 'imports:upload' %}">New upload</a>
+    </div>
+
+    <div id="import-history" hx-get="{% url 'imports:history' %}" hx-target="#import-history" hx-trigger="load, every 60s">
+        {% include 'imports/partials/history_table.html' %}
+    </div>
+</section>
+{% endblock %}

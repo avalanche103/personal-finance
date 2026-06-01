@@ -1,0 +1,64 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{{ project_name }}{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="stylesheet" href="{% static 'css/app.css' %}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <a class="brand" href="{% url 'dashboard:home' %}">
+                <span class="brand-mark">PF</span>
+                <span>
+                    <strong>Personal Finance</strong>
+                    <small>Local MVP dashboard</small>
+                </span>
+            </a>
+            <nav class="nav">
+                <a href="{% url 'dashboard:home' %}">Dashboard</a>
+                <a href="{% url 'institutions:list' %}">Institutions</a>
+                <a href="{% url 'accounts:list' %}">Accounts</a>
+                <a href="{% url 'products:list' %}">Products</a>
+                <a href="{% url 'dashboard:exchange_rates' %}">Exchange Rates</a>
+                <a href="{% url 'dashboard:portfolio_report' %}">Portfolio Report</a>
+                <a href="{% url 'imports:upload' %}">Import Upload</a>
+                <a href="{% url 'imports:history' %}">Import History</a>
+                <a href="/admin/">Admin</a>
+            </nav>
+            <div class="sidebar-note">
+                <span>Base currency</span>
+                <strong>{{ reporting_base_currency }}</strong>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="page-header">
+                <div>
+                    <p class="eyebrow">Local MVP</p>
+                    <h1>{% block page_title %}{{ project_name }}{% endblock %}</h1>
+                </div>
+                <div class="header-actions">
+                    <a class="button button-secondary" href="{% url 'imports:upload' %}">New import</a>
+                    <a class="button" href="/admin/">Open admin</a>
+                </div>
+            </header>
+
+            {% if messages %}
+                <section class="messages">
+                    {% for message in messages %}
+                        <div class="message {{ message.tags }}">{{ message }}</div>
+                    {% endfor %}
+                </section>
+            {% endif %}
+
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

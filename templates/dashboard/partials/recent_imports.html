@@ -1,0 +1,13 @@
+<div class="mini-list">
+    {% for job in recent_imports %}
+        <div class="mini-list-item">
+            <div>
+                <strong>{{ job.source.name }}</strong>
+                <span>{{ job.original_filename|default:'Manual/API job' }}</span>
+            </div>
+            <span class="status-chip status-{{ job.status }}">{{ job.get_status_display }}</span>
+        </div>
+    {% empty %}
+        <p class="empty-state">No import jobs yet.</p>
+    {% endfor %}
+</div>

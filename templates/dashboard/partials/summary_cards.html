@@ -1,0 +1,22 @@
+<section class="metric-grid">
+    <article class="metric-card accent-gold">
+        <span>Portfolio total</span>
+        <strong>${{ metrics.portfolio_usd|floatformat:2 }}</strong>
+        <small>Accounts and products converted to USD.</small>
+    </article>
+    <article class="metric-card accent-blue">
+        <span>Institutions</span>
+        <strong>{{ metrics.institutions_count }}</strong>
+        <small>Top-level ownership points for your data.</small>
+    </article>
+    <article class="metric-card accent-green">
+        <span>Accounts</span>
+        <strong>{{ metrics.accounts_count }}</strong>
+        <small>Banking, brokerage, deposits, wallets and cash.</small>
+    </article>
+    <article class="metric-card accent-orange">
+        <span>Products</span>
+        <strong>{{ metrics.products_count }}</strong>
+        <small>Assets linked to institutions, not to accounts.</small>
+    </article>
+</section>

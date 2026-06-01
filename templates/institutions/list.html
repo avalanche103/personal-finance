@@ -1,0 +1,24 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Institutions | {{ project_name }}{% endblock %}
+{% block page_title %}Financial Institutions{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Directory</p>
+            <h2>Institutions list</h2>
+        </div>
+        <a class="button" href="/admin/institutions/financialinstitution/add/">Add institution</a>
+    </div>
+
+    <form class="filter-bar" hx-get="{% url 'institutions:list' %}" hx-target="#institution-table" hx-trigger="keyup changed delay:300ms from:#institution-search">
+        <input id="institution-search" type="search" name="q" value="{{ query }}" placeholder="Search by name, country or type">
+    </form>
+
+    <div id="institution-table">
+        {% include 'institutions/partials/table.html' %}
+    </div>
+</section>
+{% endblock %}
