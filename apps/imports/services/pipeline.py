@@ -1,11 +1,13 @@
 import hashlib
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
 from django.utils import timezone
 
 from apps.imports.models import ImportJob, RawImportFile
 from apps.imports.services.parsers.base import ParseResult
 from apps.imports.services.parsers.pdf import PDFImportParser
+from apps.imports.services.parsers.text import TextImportParser
 from apps.imports.services.parsers.xls import XLSImportParser
 from apps.imports.services.storage import calculate_upload_checksum, persist_uploaded_file
 
@@ -14,6 +16,8 @@ PARSER_REGISTRY = {
     'xls': XLSImportParser(),
     'xlsx': XLSImportParser(),
     'pdf': PDFImportParser(),
+    'txt': TextImportParser(),
+    'tsv': TextImportParser(),
 }
 
 
@@ -82,3 +86,12 @@ def process_uploaded_import(source, uploaded_file):
             job.finished_at = timezone.now()
             job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
             raise
+
+
+def process_clipboard_import(source, clipboard_text: str):
+    uploaded_file = SimpleUploadedFile(
+        'finstore_clipboard.txt',
+        clipboard_text.encode('utf-8'),
+        content_type='text/plain',
+    )
+    return process_uploaded_import(source, uploaded_file)

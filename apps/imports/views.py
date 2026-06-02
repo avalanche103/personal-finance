@@ -3,13 +3,16 @@ from django.shortcuts import redirect, render
 
 from apps.imports.forms import ImportUploadForm
 from apps.imports.models import ImportJob
-from apps.imports.services.pipeline import process_uploaded_import
+from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
 
 
 def import_upload(request):
     form = ImportUploadForm(request.POST or None, request.FILES or None)
     if request.method == 'POST' and form.is_valid():
-        job, created = process_uploaded_import(form.cleaned_data['source'], form.cleaned_data['file'])
+        if form.cleaned_data['clipboard_text']:
+            job, created = process_clipboard_import(form.cleaned_data['source'], form.cleaned_data['clipboard_text'])
+        else:
+            job, created = process_uploaded_import(form.cleaned_data['source'], form.cleaned_data['file'])
         if created:
             messages.success(request, f'Import job #{job.pk} created with status {job.status}.')
         else:

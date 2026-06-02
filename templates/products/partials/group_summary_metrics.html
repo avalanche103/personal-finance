@@ -1,0 +1,4 @@
+<strong>{{ group.total_value_usd|floatformat:2 }} USD</strong>
+<div class="muted">{{ group.total_value_native|floatformat:2 }} {{ group.currency.code }}</div>
+<div class="muted">Return {% if group.total_return_pct is not None %}{{ group.total_return_value|floatformat:2 }} {{ group.currency.code }} ({{ group.total_return_pct|floatformat:2 }}%){% else %}-{% endif %}</div>
+<div class="muted">XIRR {% if group.xirr_pct is not None %}{{ group.xirr_pct|floatformat:2 }}%{% else %}-{% endif %}</div>

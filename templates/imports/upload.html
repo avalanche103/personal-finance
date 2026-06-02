@@ -15,13 +15,27 @@
 
         <form method="post" enctype="multipart/form-data" class="stack-md">
             {% csrf_token %}
-            {{ form.as_p }}
+            <div>
+                {{ form.source.label_tag }}
+                {{ form.source }}
+            </div>
+            <div>
+                {{ form.file.label_tag }}
+                {{ form.file }}
+            </div>
+            <div>
+                {{ form.clipboard_text.label_tag }}
+                {{ form.clipboard_text }}
+            </div>
+            {% if form.non_field_errors %}
+                <div class="message error">{{ form.non_field_errors }}</div>
+            {% endif %}
             <button type="submit" class="button">Create import job</button>
         </form>
 
         <div class="note-card">
             <strong>Supported now</strong>
-            <p>XLS/XLSX preview via pandas/openpyxl, PDF preview layer via pypdf, API integrations as adapters, manual review before save for complex statements.</p>
+            <p>XLS/XLSX preview via pandas/openpyxl, PDF preview layer via pypdf, API integrations as adapters, and Finstore clipboard paste for tab-separated rows.</p>
         </div>
     </article>
 

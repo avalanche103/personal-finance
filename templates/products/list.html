@@ -13,9 +13,18 @@
         <a class="button" href="/admin/products/product/add/">Add product</a>
     </div>
 
-    <form class="filter-bar" hx-get="{% url 'products:list' %}" hx-target="#product-table" hx-trigger="keyup changed delay:300ms from:#product-search">
+    <form class="filter-bar" hx-get="{% url 'products:list' %}" hx-target="#product-table" hx-trigger="keyup changed delay:300ms from:#product-search, change from:#show-closed-products">
         <input id="product-search" type="search" name="q" value="{{ query }}" placeholder="Search by name, symbol, ISIN or institution">
+        <label class="toggle-field">
+            <input id="show-closed-products" type="checkbox" name="show_closed" value="1" {% if show_closed %}checked{% endif %}>
+            <span>Show closed products</span>
+        </label>
     </form>
+
+    <p class="muted">Products are grouped by institution and currency, for example Finstore_USD and Finstore_BYN.</p>
+    {% if search_includes_closed %}
+        <p class="muted">Search results include closed products.</p>
+    {% endif %}
 
     <div id="product-table">
         {% include 'products/partials/table.html' %}

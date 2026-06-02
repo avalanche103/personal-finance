@@ -1,0 +1,183 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ product.name }} | {{ project_name }}{% endblock %}
+{% block page_title %}{{ product.name }}{% endblock %}
+
+{% block content %}
+<section class="stack-md">
+    <div class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Product overview</p>
+                <h2>{{ product.name }}</h2>
+                <p class="muted">{{ product.institution.name }} · {{ product.currency.code }}</p>
+            </div>
+            <a class="button button-secondary" href="{% url 'products:list' %}">Back to products</a>
+        </div>
+
+        <form class="filter-bar" method="get">
+            <label class="filter-field">
+                <span>From</span>
+                <input type="date" name="from" value="{{ filter_from }}">
+            </label>
+            <label class="filter-field">
+                <span>To</span>
+                <input type="date" name="to" value="{{ filter_to }}">
+            </label>
+            <button class="button" type="submit">Apply filters</button>
+            <a class="button button-secondary" href="{% url 'products:detail' product.pk %}">Reset</a>
+        </form>
+
+        <div class="info-grid">
+            <div class="info-card">
+                <span>Current value</span>
+                <strong>{{ product.current_value_usd|floatformat:2 }} USD</strong>
+            </div>
+            <div class="info-card">
+                <span>Units</span>
+                <strong>{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</strong>
+            </div>
+            <div class="info-card">
+                <span>Current price</span>
+                <strong>{{ product.current_price|floatformat:4 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Transactions</span>
+                <strong>{{ transaction_count }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Open units</span>
+                <strong>{{ position_summary.open_units|floatformat:4 }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Average entry price</span>
+                <strong>{{ position_summary.avg_entry_price|floatformat:4 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Unrealized P&amp;L</span>
+                <strong>{{ position_summary.unrealized_pnl|floatformat:4 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Returned cash</span>
+                <strong>{{ position_summary.returned_cash|floatformat:2 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Passive income</span>
+                <strong>{{ position_summary.passive_income|floatformat:2 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Open cost basis</span>
+                <strong>{{ position_summary.open_cost_basis|floatformat:2 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Total return</span>
+                <strong>{{ performance_summary.total_return_value|floatformat:2 }} {{ product.currency.code }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Total return %</span>
+                <strong>{% if performance_summary.total_return_pct is not None %}{{ performance_summary.total_return_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
+            </div>
+            <div class="info-card">
+                <span>XIRR</span>
+                <strong>{% if performance_summary.xirr_pct is not None %}{{ performance_summary.xirr_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-two">
+        <section class="panel stack-md">
+            <div>
+                <p class="eyebrow">Product card</p>
+                <h2>Known details</h2>
+            </div>
+
+            <div class="meta-list">
+                <div class="meta-item"><strong>Institution</strong><div class="muted">{{ product.institution.name }}</div></div>
+                <div class="meta-item"><strong>Type</strong><div class="muted">{{ product.get_product_type_display }}</div></div>
+                <div class="meta-item"><strong>Currency</strong><div class="muted">{{ product.currency.code }} · {{ product.currency.name }}</div></div>
+                <div class="meta-item"><strong>Bought units</strong><div class="muted">{{ position_summary.bought_units|floatformat:4 }}</div></div>
+                <div class="meta-item"><strong>Redeemed units</strong><div class="muted">{{ position_summary.redeemed_units|floatformat:4 }}</div></div>
+                <div class="meta-item"><strong>Symbol</strong><div class="muted">{{ product.symbol|default:'-' }}</div></div>
+                <div class="meta-item"><strong>ISIN</strong><div class="muted">{{ product.isin|default:'-' }}</div></div>
+                <div class="meta-item"><strong>External ID</strong><div class="muted">{{ product.external_id|default:'-' }}</div></div>
+                <div class="meta-item"><strong>Market value</strong><div class="muted">{{ product.market_value|floatformat:4 }} {{ product.currency.code }}</div></div>
+                <div class="meta-item"><strong>Status</strong><div class="muted">{% if product.is_active %}Active{% else %}Inactive{% endif %}</div></div>
+                <div class="meta-item"><strong>Created</strong><div class="muted">{{ product.created_at|date:'Y-m-d H:i' }}</div></div>
+                <div class="meta-item"><strong>Updated</strong><div class="muted">{{ product.updated_at|date:'Y-m-d H:i' }}</div></div>
+            </div>
+        </section>
+
+        <section class="panel stack-md">
+            <div>
+                <p class="eyebrow">Extra data</p>
+                <h2>Metadata and rates</h2>
+            </div>
+
+            <div class="meta-list">
+                <div class="meta-item"><strong>Institution website</strong><div class="muted">{{ product.institution.website|default:'-' }}</div></div>
+                <div class="meta-item"><strong>Institution country</strong><div class="muted">{{ product.institution.country }}</div></div>
+                <div class="meta-item"><strong>Latest BYN rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.rate_byn|stringformat:'.6f' }} on {{ latest_rate.rate_date|date:'Y-m-d' }}{% else %}No rate history{% endif %}</div></div>
+                <div class="meta-item"><strong>USD cross rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.usd_cross_rate|stringformat:'.10f' }}{% else %}-{% endif %}</div></div>
+            </div>
+
+            <div>
+                <strong>Raw metadata</strong>
+                {% if product_metadata %}
+                    <div class="meta-list" style="margin-top: 0.75rem;">
+                        {% for key, value in product_metadata %}
+                            <div class="meta-item">
+                                <strong>{{ key }}</strong>
+                                <div class="muted">{{ value }}</div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="muted">No metadata stored for this product.</p>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+
+    <section class="panel stack-md">
+        <div>
+            <p class="eyebrow">Operations</p>
+            <h2>Transactions</h2>
+            <p class="muted">Showing {{ transaction_count }} of {{ all_transaction_count }} transactions for this product.</p>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Account</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                        <th class="text-right">Quantity</th>
+                        <th class="text-right">Amount</th>
+                        <th class="text-right">Unit price</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for transaction in transactions %}
+                        <tr>
+                            <td>{{ transaction.occurred_at|date:'Y-m-d H:i' }}</td>
+                            <td>{{ transaction.account.name }}</td>
+                            <td>{{ transaction.get_transaction_type_display }}</td>
+                            <td>{{ transaction.description|default:'-' }}</td>
+                            <td class="text-right">{{ transaction.quantity|floatformat:4 }}</td>
+                            <td class="text-right">{{ transaction.amount|floatformat:2 }} {{ transaction.currency.code }}</td>
+                            <td class="text-right">{{ transaction.unit_price|floatformat:4 }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="7" class="empty-state">No product transactions found.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</section>
+{% endblock %}

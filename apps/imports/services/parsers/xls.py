@@ -54,47 +54,39 @@ class XLSImportParser(BaseImportParser):
             for account in Account.objects.select_related('currency').filter(institution=institution)
         }
         token_summaries: dict[str, dict] = {}
-        transactions_created = 0
+        pending_transactions: list[dict] = []
         for row in result.artifacts.get('normalized_records', []):
             token_name = row.get('token_name')
 
             amount_decimal = self._to_decimal(row.get('amount')) if row.get('amount') not in ('', None) else Decimal('0')
             quantity = row.get('quantity')
             quantity_decimal = self._to_decimal(quantity) if quantity not in ('', None) else Decimal('0')
+            position_quantity = self._build_finstore_position_quantity(row, quantity_decimal)
             occurred_at = row.get('occurred_at', '')
             amount_currency_code = self._normalize_currency_code(row.get('amount_currency', ''))
 
             account = finstore_accounts.get(amount_currency_code)
-            if account is not None and occurred_at:
-                transaction_amount, transaction_type = self._build_finstore_transaction_payload(row, amount_decimal)
-                _, was_created = Transaction.objects.update_or_create(
-                    import_fingerprint=f"finstore:{raw_import_file.checksum}:{row.get('row_number')}",
-                    defaults={
-                        'account': account,
-                        'product': None,
-                        'import_job': raw_import_file.job,
-                        'transaction_type': transaction_type,
-                        'currency': account.currency,
-                        'amount': transaction_amount,
-                        'amount_usd': Decimal('0'),
-                        'quantity': quantity_decimal,
-                        'unit_price': Decimal('0'),
-                        'occurred_at': occurred_at,
-                        'description': self._build_transaction_description(row),
-                        'metadata': {
-                            'imported_from': 'finstore-history',
-                            'operation_type': row.get('operation_type', ''),
-                            'token_name': token_name,
-                            'token_id': row.get('token_id', ''),
-                            'amount_currency': amount_currency_code,
-                            'raw_amount': row.get('amount', ''),
-                        },
-                    },
-                )
-                if was_created:
-                    transactions_created += 1
+            transaction_amount, transaction_type = self._build_finstore_transaction_payload(row, amount_decimal)
 
             if not token_name:
+                if account is not None and occurred_at:
+                    pending_transactions.append(
+                        {
+                            'row_number': row.get('row_number'),
+                            'token_name': '',
+                            'account': account,
+                            'transaction_type': transaction_type,
+                            'amount': transaction_amount,
+                            'quantity': position_quantity,
+                            'unit_price': Decimal('0'),
+                            'occurred_at': occurred_at,
+                            'amount_currency_code': amount_currency_code,
+                            'raw_amount': row.get('amount', ''),
+                            'token_id': row.get('token_id', ''),
+                            'description': self._build_transaction_description(row),
+                            'operation_type': row.get('operation_type', ''),
+                        }
+                    )
                 continue
 
             summary = token_summaries.setdefault(
@@ -116,9 +108,9 @@ class XLSImportParser(BaseImportParser):
             summary['operations'].add(row.get('operation_type', ''))
 
             if quantity not in ('', None):
-                summary['units'] += quantity_decimal
+                summary['units'] += position_quantity
 
-            if quantity_decimal > 0 and amount_decimal > 0 and (not summary['latest_price_at'] or occurred_at >= summary['latest_price_at']):
+            if position_quantity > 0 and amount_decimal > 0 and (not summary['latest_price_at'] or occurred_at >= summary['latest_price_at']):
                 summary['latest_unit_price'] = amount_decimal / quantity_decimal
                 summary['latest_price_at'] = occurred_at
 
@@ -128,14 +120,30 @@ class XLSImportParser(BaseImportParser):
                 if not summary['last_operation_at'] or occurred_at > summary['last_operation_at']:
                     summary['last_operation_at'] = occurred_at
 
-                Transaction.objects.filter(import_fingerprint=f"finstore:{raw_import_file.checksum}:{row.get('row_number')}").update(
-                    unit_price=summary['latest_unit_price']
+            if account is not None and occurred_at:
+                pending_transactions.append(
+                    {
+                        'row_number': row.get('row_number'),
+                        'token_name': token_name,
+                        'account': account,
+                        'transaction_type': transaction_type,
+                        'amount': transaction_amount,
+                        'quantity': position_quantity,
+                        'unit_price': summary['latest_unit_price'],
+                        'occurred_at': occurred_at,
+                        'amount_currency_code': amount_currency_code,
+                        'raw_amount': row.get('amount', ''),
+                        'token_id': row.get('token_id', ''),
+                        'description': self._build_transaction_description(row),
+                        'operation_type': row.get('operation_type', ''),
+                    }
                 )
 
         products_created = 0
+        product_map: dict[str, Product] = {}
         for token_name, summary in token_summaries.items():
             currency = self._resolve_currency(summary['currency_code'])
-            _, created = Product.objects.update_or_create(
+            product, created = Product.objects.update_or_create(
                 institution=institution,
                 external_id=token_name,
                 defaults={
@@ -146,6 +154,7 @@ class XLSImportParser(BaseImportParser):
                     'units': summary['units'],
                     'current_price': summary['latest_unit_price'],
                     'current_value_usd': Decimal('0'),
+                    'is_active': summary['units'] > 0,
                     'metadata': {
                         'imported_from': 'finstore-history',
                         'token_id': summary['token_id'],
@@ -157,10 +166,40 @@ class XLSImportParser(BaseImportParser):
                     },
                 },
             )
+            product_map[token_name] = product
             if created:
                 products_created += 1
 
-        from apps.common.services.exchange_rates import recalculate_usd_valuations
+        transactions_created = 0
+        for transaction_row in pending_transactions:
+            _, was_created = Transaction.objects.update_or_create(
+                import_fingerprint=f"finstore:{raw_import_file.checksum}:{transaction_row['row_number']}",
+                defaults={
+                    'account': transaction_row['account'],
+                    'product': product_map.get(transaction_row['token_name']),
+                    'import_job': raw_import_file.job,
+                    'transaction_type': transaction_row['transaction_type'],
+                    'currency': transaction_row['account'].currency,
+                    'amount': transaction_row['amount'],
+                    'amount_usd': Decimal('0'),
+                    'quantity': transaction_row['quantity'],
+                    'unit_price': transaction_row['unit_price'],
+                    'occurred_at': transaction_row['occurred_at'],
+                    'description': transaction_row['description'],
+                    'metadata': {
+                        'imported_from': 'finstore-history',
+                        'operation_type': transaction_row['operation_type'],
+                        'token_name': transaction_row['token_name'],
+                        'token_id': transaction_row['token_id'],
+                        'amount_currency': transaction_row['amount_currency_code'],
+                        'raw_amount': transaction_row['raw_amount'],
+                    },
+                },
+            )
+            if was_created:
+                transactions_created += 1
+
+        from apps.common.services.finstore_reconciliation import reconcile_finstore_products
 
         transaction_totals = {
             row['account_id']: row['total'] or Decimal('0')
@@ -176,7 +215,10 @@ class XLSImportParser(BaseImportParser):
                 account.save(update_fields=['current_balance', 'updated_at'])
             accounts_synced += 1
 
-        recalculate_usd_valuations()
+        reconcile_finstore_products(
+            institution_id=institution.id,
+            token_names=sorted(token_summaries.keys()),
+        )
 
         result.metadata['products_created'] = products_created
         result.metadata['transactions_created'] = transactions_created
@@ -271,16 +313,25 @@ class XLSImportParser(BaseImportParser):
     def _build_finstore_transaction_payload(self, row: dict, amount_decimal: Decimal) -> tuple[Decimal, str]:
         operation_type = row.get('operation_type', '')
         trade_operations = {'Покупка токенов', 'Покупка ICO токенов на Вторичном рынке'}
-        income_operations = {'Получение дохода', 'Возврат инвестиций'}
+        income_operations = {'Получение дохода'}
+        redemption_operations = {'Возврат инвестиций'}
         deposit_operations = {'Пополнение кошелька'}
 
         if operation_type in trade_operations:
             return -abs(amount_decimal), Transaction.TransactionType.TRADE
+        if operation_type in redemption_operations:
+            return abs(amount_decimal), Transaction.TransactionType.INCOME
         if operation_type in income_operations:
             return abs(amount_decimal), Transaction.TransactionType.INCOME
         if operation_type in deposit_operations:
             return abs(amount_decimal), Transaction.TransactionType.DEPOSIT
         return amount_decimal, Transaction.TransactionType.OTHER
+
+    def _build_finstore_position_quantity(self, row: dict, quantity_decimal: Decimal) -> Decimal:
+        operation_type = row.get('operation_type', '')
+        if operation_type == 'Возврат инвестиций':
+            return -abs(quantity_decimal)
+        return quantity_decimal
 
     def _build_transaction_description(self, row: dict) -> str:
         token_name = row.get('token_name', '')
@@ -306,7 +357,7 @@ class XLSImportParser(BaseImportParser):
                 if numeric_value is not None:
                     parsed = pd.to_datetime(numeric_value, unit='D', origin='1899-12-30', errors='coerce')
                 else:
-                    parsed = pd.to_datetime(value, errors='coerce')
+                    parsed = pd.to_datetime(value, errors='coerce', dayfirst=True)
             elif isinstance(value, (int, float, Decimal)):
                 parsed = pd.to_datetime(value, unit='D', origin='1899-12-30', errors='coerce')
             else:

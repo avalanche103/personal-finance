@@ -11,6 +11,7 @@ from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
 from apps.imports.models import ImportJob
 from apps.institutions.models import FinancialInstitution
+from apps.products.analytics import build_product_groups, build_product_transaction_map
 from apps.products.models import Product
 
 
@@ -25,7 +26,7 @@ def _dashboard_metrics():
     return {
         'institutions_count': FinancialInstitution.objects.count(),
         'accounts_count': Account.objects.count(),
-        'products_count': Product.objects.count(),
+        'products_count': Product.objects.filter(is_active=True).count(),
         'portfolio_usd': account_total + product_total,
     }
 
@@ -141,11 +142,13 @@ def _historical_portfolio_context(as_of_date):
 
 
 def dashboard_home(request):
+    products = list(Product.objects.select_related('institution', 'currency').filter(is_active=True).order_by('institution__name', 'currency__code', 'name'))
+    product_transaction_map = build_product_transaction_map([product.id for product in products])
     context = {
         'metrics': _dashboard_metrics(),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
         'accounts': Account.objects.select_related('institution', 'currency').order_by('name')[:8],
-        'products': Product.objects.select_related('institution', 'currency').order_by('name')[:8],
+        'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=timezone.localdate()),
         'recent_imports': ImportJob.objects.select_related('source').order_by('-created_at')[:5],
         'latest_rate_cards': _latest_rate_cards(),
     }
