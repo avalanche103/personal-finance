@@ -14,9 +14,32 @@ from apps.products.analytics import (
 from apps.products.models import Product
 
 
+PRODUCT_SORT_FIELDS = ('name', 'institution', 'type', 'currency', 'units', 'value_usd', 'value_byn')
+PRODUCT_NUMERIC_SORT_FIELDS = {'units', 'value_usd', 'value_byn'}
+
+
+def _resolve_product_sort(request):
+    sort_field = request.GET.get('sort', 'value_usd')
+    if sort_field not in PRODUCT_SORT_FIELDS:
+        sort_field = 'value_usd'
+
+    sort_dir = request.GET.get('dir', 'desc')
+    if sort_dir not in ('asc', 'desc'):
+        sort_dir = 'desc'
+
+    return sort_field, sort_dir
+
+
+def _next_product_sort_dir(field: str, current_sort: str, current_dir: str) -> str:
+    if field == current_sort:
+        return 'desc' if current_dir == 'asc' else 'asc'
+    return 'desc' if field in PRODUCT_NUMERIC_SORT_FIELDS else 'asc'
+
+
 def product_list(request):
     query = request.GET.get('q', '').strip()
     show_closed = request.GET.get('show_closed') == '1'
+    sort_field, sort_dir = _resolve_product_sort(request)
     products = Product.objects.select_related('institution', 'currency')
     if query:
         products = products.filter(
@@ -32,10 +55,22 @@ def product_list(request):
     ordered_products = products.order_by('institution__name', 'currency__code', 'name')
     transaction_map = build_product_transaction_map([product.id for product in ordered_products])
     context = {
-        'product_groups': build_product_groups(ordered_products, transaction_map=transaction_map, as_of_date=timezone.localdate()),
+        'product_groups': build_product_groups(
+            ordered_products,
+            transaction_map=transaction_map,
+            as_of_date=timezone.localdate(),
+            sort_field=sort_field,
+            sort_dir=sort_dir,
+        ),
         'query': query,
         'show_closed': show_closed,
         'search_includes_closed': bool(query and not show_closed),
+        'sort': sort_field,
+        'sort_dir': sort_dir,
+        'sort_next_dirs': {
+            field: _next_product_sort_dir(field, sort_field, sort_dir)
+            for field in PRODUCT_SORT_FIELDS
+        },
     }
     template_name = 'products/partials/table.html' if request.headers.get('HX-Request') == 'true' else 'products/list.html'
     return render(request, template_name, context)
@@ -74,7 +109,12 @@ def product_detail(request, pk):
 
     transactions = list(filtered_transactions_qs)
     currency_rates = list(currency_rates_qs[:20])
-    position_summary = build_product_position_summary(all_transactions, product.market_value)
+    position_summary = build_product_position_summary(
+        all_transactions,
+        product.market_value,
+        market_value_usd=product.current_value_usd,
+        currency=product.currency,
+    )
     performance_summary = build_product_performance_summary(all_transactions, position_summary, as_of_date=timezone.localdate())
 
     context = {

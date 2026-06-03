@@ -1,0 +1,5 @@
+<strong>{{ group.total_balance_usd|floatformat:2 }} USD</strong>
+<div class="muted">{{ group.accounts|length }} accounts</div>
+{% for row in group.balances_by_currency %}
+    <div class="muted">{{ row.balance|floatformat:2 }} {{ row.currency_code }}</div>
+{% endfor %}

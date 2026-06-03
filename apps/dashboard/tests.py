@@ -1,10 +1,10 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.test import Client, TestCase
 from django.utils import timezone
 
-from apps.accounts.models import Account, Transaction
+from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
@@ -31,11 +31,72 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Finstore')
 		self.assertContains(response, 'Tracked groups')
 		self.assertContains(response, 'Manage products')
+		self.assertContains(response, 'Historical reporting')
+		self.assertContains(response, 'Portfolio report by date')
+		self.assertContains(response, 'Last day of previous month')
 		self.assertIn('product_groups', response.context)
+		self.assertIn('historical_reporting', response.context)
+		self.assertEqual(len(response.context['historical_reporting']['period_comparisons']), 2)
 
 	def test_portfolio_report_contains_bootstrap_institution(self):
 		response = self.client.get('/portfolio-report/?as_of=2026-05-31')
 		self.assertContains(response, 'Finstore')
+
+	def test_portfolio_report_period_comparison_uses_reference_dates(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Comparison Bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Comparison cash',
+			account_type=Account.AccountType.BANK,
+			currency=usd,
+			current_balance=Decimal('2000'),
+			current_balance_usd=Decimal('2000'),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('1000'),
+			balance_usd=Decimal('1000'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 5, 31, 12, 0)),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('1500'),
+			balance_usd=Decimal('1500'),
+			captured_at=timezone.make_aware(timezone.datetime(2025, 12, 31, 12, 0)),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('2000'),
+			balance_usd=Decimal('2000'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 6, 3, 12, 0)),
+		)
+
+		response = self.client.get('/portfolio-report/?as_of=2026-06-04')
+		self.assertEqual(response.status_code, 200)
+		comparisons = response.context['period_comparisons']
+		self.assertEqual(len(comparisons), 2)
+
+		prev_month = next(item for item in comparisons if item['key'] == 'prev_month')
+		prev_year = next(item for item in comparisons if item['key'] == 'prev_year')
+		self.assertEqual(prev_month['reference_date'], date(2026, 5, 31))
+		self.assertEqual(prev_year['reference_date'], date(2025, 12, 31))
+		self.assertEqual(prev_month['portfolio']['baseline_usd'], Decimal('1000'))
+		self.assertEqual(prev_year['portfolio']['baseline_usd'], Decimal('1500'))
+		self.assertEqual(prev_month['portfolio']['change_abs'], Decimal('1000'))
+		self.assertEqual(prev_month['portfolio']['change_pct'], Decimal('100'))
+		self.assertEqual(prev_year['portfolio']['change_abs'], Decimal('500'))
+		self.assertContains(response, 'Last day of previous month')
+		self.assertContains(response, 'Last day of previous year')
 
 	def test_dashboard_group_shows_xirr_for_custom_product_group(self):
 		usd = Currency.objects.get(code='USD')

@@ -1,0 +1,46 @@
+---
+description: Restart Django dev server after completing implementation tasks
+alwaysApply: true
+---
+
+# Restart dev server after tasks
+
+After finishing an implementation, fix, or refactor task in this repo, restart the local Django development server so changes are picked up reliably.
+
+## When to restart
+
+Restart when the task changed any of:
+
+- Python code (`apps/`, `config/`, `manage.py`)
+- templates (`templates/`)
+- static files (`static/`)
+- migrations or settings
+
+Skip restart for read-only tasks (exploration, reviews, questions with no code changes).
+
+## How to restart on Windows
+
+1. Stop any process listening on port `8000`.
+2. Start the server again from the project root.
+
+Use PowerShell:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+cd "e:\laragon\www\personal-finance"
+python manage.py runserver
+```
+
+Prefer project venv Python when present:
+
+- `venv\Scripts\python.exe manage.py runserver`
+- `.venv\Scripts\python.exe manage.py runserver`
+
+Run the server in the background and verify it responds at `http://127.0.0.1:8000/`.
+
+## Completion checklist
+
+Before ending the response:
+
+1. Restart was performed (or skipped with a brief reason).
+2. Mention the server URL if it was restarted.

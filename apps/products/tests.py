@@ -108,6 +108,108 @@ class ProductViewsTests(TestCase):
 		self.assertContains(response, 'XIRR')
 		self.assertNotContains(response, 'Closed token')
 
+	def test_product_list_sorts_products_within_group_by_value_usd(self):
+		Product.objects.create(
+			institution=self.finstore,
+			name='Small bond',
+			product_type=Product.ProductType.BOND,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('100'),
+			current_value_usd=Decimal('100'),
+		)
+		Product.objects.create(
+			institution=self.finstore,
+			name='Large bond',
+			product_type=Product.ProductType.BOND,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('500'),
+			current_value_usd=Decimal('500'),
+		)
+
+		response = self.client.get(reverse('products:list'))
+		group = next(item for item in response.context['product_groups'] if item['label'] == 'Finstore_USD')
+		names = [product.name for product in group['products']]
+
+		self.assertEqual(names, ['Bond USD', 'Large bond', 'Small bond'])
+
+	def test_product_list_can_sort_by_name(self):
+		Product.objects.create(
+			institution=self.finstore,
+			name='Alpha bond',
+			product_type=Product.ProductType.BOND,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('1000'),
+			current_value_usd=Decimal('1000'),
+		)
+		Product.objects.create(
+			institution=self.finstore,
+			name='Zeta bond',
+			product_type=Product.ProductType.BOND,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('100'),
+			current_value_usd=Decimal('100'),
+		)
+
+		response = self.client.get(reverse('products:list'), {'sort': 'name', 'dir': 'asc'})
+		group = next(item for item in response.context['product_groups'] if item['label'] == 'Finstore_USD')
+		names = [product.name for product in group['products']]
+
+		self.assertEqual(names[0], 'Alpha bond')
+		self.assertEqual(names[-1], 'Zeta bond')
+
+	def test_product_list_shows_value_byn_for_byn_group(self):
+		response = self.client.get(reverse('products:list'))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Value BYN')
+		group = next(item for item in response.context['product_groups'] if item['label'] == 'Finstore_BYN')
+		product = group['products'][0]
+		self.assertEqual(product.market_value, Decimal('1000'))
+		self.assertContains(response, 'Value BYN')
+		self.assertContains(response, '1000,00 BYN')
+
+	def test_product_list_calculates_non_usd_return_in_usd(self):
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product_byn,
+			transaction_type=Transaction.TransactionType.TRADE,
+			currency=self.byn,
+			import_fingerprint='products-test-list-byn-buy',
+			amount=Decimal('-1000'),
+			amount_usd=Decimal('-300'),
+			quantity=Decimal('20'),
+			unit_price=Decimal('50'),
+			occurred_at=timezone.now() - timedelta(days=20),
+		)
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product_byn,
+			transaction_type=Transaction.TransactionType.INCOME,
+			currency=self.byn,
+			import_fingerprint='products-test-list-byn-income',
+			amount=Decimal('100'),
+			amount_usd=Decimal('35'),
+			quantity=Decimal('0'),
+			unit_price=Decimal('0'),
+			occurred_at=timezone.now() - timedelta(days=5),
+		)
+
+		response = self.client.get(reverse('products:list'))
+
+		self.assertEqual(response.status_code, 200)
+		group = next(item for item in response.context['product_groups'] if item['label'] == 'Finstore_BYN')
+		self.assertEqual(group['total_return_value'], Decimal('45'))
+		self.assertEqual(group['total_return_pct'], Decimal('15'))
+		self.assertIsNotNone(group['xirr_pct'])
+
+		detail_response = self.client.get(reverse('products:detail', args=[self.product_byn.pk]))
+		self.assertEqual(detail_response.context['performance_summary']['total_return_value'], Decimal('45'))
+		self.assertEqual(detail_response.context['performance_summary']['total_return_pct'], Decimal('15'))
+
 	def test_product_list_can_show_closed_products(self):
 		response = self.client.get(reverse('products:list'), {'show_closed': '1'})
 

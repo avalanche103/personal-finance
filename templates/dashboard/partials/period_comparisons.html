@@ -1,0 +1,27 @@
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Reference</th>
+                <th class="text-right">Baseline USD</th>
+                <th class="text-right">Portfolio change</th>
+                <th class="text-right">Accounts change</th>
+                <th class="text-right">Products change</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for period in period_comparisons %}
+                <tr>
+                    <td>
+                        <strong>{{ period.label }}</strong>
+                        <div class="muted">{{ period.reference_date|date:'Y-m-d' }}</div>
+                    </td>
+                    <td class="text-right">${{ period.portfolio.baseline_usd|floatformat:2 }}</td>
+                    <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.portfolio %}</td>
+                    <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.accounts %}</td>
+                    <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.products %}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

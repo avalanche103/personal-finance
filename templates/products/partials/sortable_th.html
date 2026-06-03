@@ -1,0 +1,16 @@
+<th class="{% if align == 'right' %}text-right {% endif %}sortable{% if sort == field %} is-sorted{% endif %}">
+    <button
+        type="button"
+        class="sort-button{% if align == 'right' %} sort-button-right{% endif %}"
+        hx-get="{% url 'products:list' %}"
+        hx-target="#product-table"
+        hx-include="#product-filters"
+        hx-vals='{"sort": "{{ field }}", "dir": "{{ next_dir }}"}'
+        aria-label="Sort by {{ label }}"
+    >
+        <span>{{ label }}</span>
+        {% if sort == field %}
+            <span class="sort-indicator" aria-hidden="true">{% if sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>
+        {% endif %}
+    </button>
+</th>

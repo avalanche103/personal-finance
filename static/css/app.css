@@ -286,18 +286,51 @@ button {
     overflow-x: auto;
 }
 
-.product-group {
+.sortable {
+    white-space: nowrap;
+}
+
+.sort-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sort-button-right {
+    margin-left: auto;
+}
+
+.sortable.is-sorted .sort-button {
+    color: var(--primary-dark);
+}
+
+.sort-indicator {
+    font-size: 0.85rem;
+    line-height: 1;
+}
+
+.product-group,
+.account-group {
     border: 1px solid rgba(17, 24, 39, 0.08);
     border-radius: 20px;
     background: rgba(255, 255, 255, 0.55);
     overflow: hidden;
 }
 
-.product-group + .product-group {
+.product-group + .product-group,
+.account-group + .account-group {
     margin-top: 1rem;
 }
 
-.product-group summary {
+.product-group summary,
+.account-group summary {
     list-style: none;
     cursor: pointer;
     padding: 1rem 1.2rem;
@@ -308,11 +341,13 @@ button {
     background: linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(183, 121, 31, 0.08));
 }
 
-.product-group summary::-webkit-details-marker {
+.product-group summary::-webkit-details-marker,
+.account-group summary::-webkit-details-marker {
     display: none;
 }
 
-.product-group[open] summary {
+.product-group[open] summary,
+.account-group[open] summary {
     border-bottom: 1px solid rgba(17, 24, 39, 0.08);
 }
 

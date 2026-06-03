@@ -32,6 +32,9 @@
             <div class="info-card">
                 <span>Current value</span>
                 <strong>{{ product.current_value_usd|floatformat:2 }} USD</strong>
+                {% if product.currency.code == 'BYN' %}
+                    <small class="muted">{{ product.market_value|floatformat:2 }} BYN</small>
+                {% endif %}
             </div>
             <div class="info-card">
                 <span>Units</span>
@@ -55,23 +58,23 @@
             </div>
             <div class="info-card">
                 <span>Unrealized P&amp;L</span>
-                <strong>{{ position_summary.unrealized_pnl|floatformat:4 }} {{ product.currency.code }}</strong>
+                <strong>{{ position_summary.unrealized_pnl_usd|floatformat:2 }} USD</strong>
             </div>
             <div class="info-card">
                 <span>Returned cash</span>
-                <strong>{{ position_summary.returned_cash|floatformat:2 }} {{ product.currency.code }}</strong>
+                <strong>{{ position_summary.returned_cash_usd|floatformat:2 }} USD</strong>
             </div>
             <div class="info-card">
                 <span>Passive income</span>
-                <strong>{{ position_summary.passive_income|floatformat:2 }} {{ product.currency.code }}</strong>
+                <strong>{{ position_summary.passive_income_usd|floatformat:2 }} USD</strong>
             </div>
             <div class="info-card">
                 <span>Open cost basis</span>
-                <strong>{{ position_summary.open_cost_basis|floatformat:2 }} {{ product.currency.code }}</strong>
+                <strong>{{ position_summary.open_cost_basis_usd|floatformat:2 }} USD</strong>
             </div>
             <div class="info-card">
                 <span>Total return</span>
-                <strong>{{ performance_summary.total_return_value|floatformat:2 }} {{ product.currency.code }}</strong>
+                <strong>{{ performance_summary.total_return_value|floatformat:2 }} USD</strong>
             </div>
             <div class="info-card">
                 <span>Total return %</span>

@@ -8,8 +8,8 @@
     <section class="panel stack-md">
         <div class="panel-header">
             <div>
-                <p class="eyebrow">Historical view</p>
-                <h2>Portfolio as of date</h2>
+                <p class="eyebrow">Historical reporting</p>
+                <h2>Portfolio report by date</h2>
             </div>
         </div>
 
@@ -20,6 +20,8 @@
             </label>
             <button type="submit" class="button">Build report</button>
         </form>
+
+        <p class="muted">Portfolio value on the selected date compared to the last day of the previous month and the last day of the previous year.</p>
 
         <section class="metric-grid compact-grid">
             <article class="metric-card accent-gold">
@@ -38,6 +40,8 @@
                 <small>Units times current price in USD terms</small>
             </article>
         </section>
+
+        {% include 'dashboard/partials/period_comparisons.html' %}
 
         {% if latest_snapshot %}
             <p class="muted">Latest snapshot used in report window: {{ latest_snapshot.captured_at|date:'Y-m-d H:i' }}</p>

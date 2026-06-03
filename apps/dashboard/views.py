@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.db.models import DecimalField, Sum, Value
@@ -64,6 +64,44 @@ def _latest_rate_cards():
             }
         )
     return cards
+
+
+def _last_day_of_previous_month(reference_date: date) -> date:
+    return reference_date.replace(day=1) - timedelta(days=1)
+
+
+def _last_day_of_previous_year(reference_date: date) -> date:
+    return date(reference_date.year - 1, 12, 31)
+
+
+def _value_change(current: Decimal, baseline: Decimal) -> dict:
+    change_abs = current - baseline
+    change_pct = (change_abs / baseline * Decimal('100')) if baseline else None
+    return {
+        'baseline_usd': baseline,
+        'change_abs': change_abs,
+        'change_pct': change_pct,
+    }
+
+
+def _build_portfolio_period_comparisons(as_of_date: date, current: dict) -> list[dict]:
+    comparisons = []
+    for key, label, reference_date in (
+        ('prev_month', 'Last day of previous month', _last_day_of_previous_month(as_of_date)),
+        ('prev_year', 'Last day of previous year', _last_day_of_previous_year(as_of_date)),
+    ):
+        baseline = _historical_portfolio_context(reference_date)
+        comparisons.append(
+            {
+                'key': key,
+                'label': label,
+                'reference_date': reference_date,
+                'portfolio': _value_change(current['portfolio_usd'], baseline['portfolio_usd']),
+                'accounts': _value_change(current['accounts_total_usd'], baseline['accounts_total_usd']),
+                'products': _value_change(current['products_total_usd'], baseline['products_total_usd']),
+            }
+        )
+    return comparisons
 
 
 def _account_value_as_of(account: Account, as_of_date, rate_cache: dict) -> Decimal:
@@ -142,15 +180,21 @@ def _historical_portfolio_context(as_of_date):
 
 
 def dashboard_home(request):
+    as_of_date = timezone.localdate()
+    historical_report = _historical_portfolio_context(as_of_date)
     products = list(Product.objects.select_related('institution', 'currency').filter(is_active=True).order_by('institution__name', 'currency__code', 'name'))
     product_transaction_map = build_product_transaction_map([product.id for product in products])
     context = {
         'metrics': _dashboard_metrics(),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
         'accounts': Account.objects.select_related('institution', 'currency').order_by('name')[:8],
-        'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=timezone.localdate()),
+        'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=as_of_date),
         'recent_imports': ImportJob.objects.select_related('source').order_by('-created_at')[:5],
         'latest_rate_cards': _latest_rate_cards(),
+        'historical_reporting': {
+            **historical_report,
+            'period_comparisons': _build_portfolio_period_comparisons(as_of_date, historical_report),
+        },
     }
     return render(request, 'dashboard/index.html', context)
 
@@ -234,4 +278,5 @@ def portfolio_report(request):
         as_of_date = timezone.localdate()
 
     context = _historical_portfolio_context(as_of_date)
+    context['period_comparisons'] = _build_portfolio_period_comparisons(as_of_date, context)
     return render(request, 'dashboard/portfolio_report.html', context)

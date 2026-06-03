@@ -1,0 +1,7 @@
+{% if change.change_pct is not None %}
+    <span class="{% if change.change_abs > 0 %}delta-up{% elif change.change_abs < 0 %}delta-down{% else %}muted{% endif %}">
+        {% if change.change_abs >= 0 %}+{% endif %}{{ change.change_abs|floatformat:2 }} USD ({{ change.change_pct|floatformat:2 }}%)
+    </span>
+{% else %}
+    <span class="muted">-</span>
+{% endif %}
