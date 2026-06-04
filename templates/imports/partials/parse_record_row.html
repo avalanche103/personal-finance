@@ -1,0 +1,21 @@
+{% load pf_extras %}
+<tr id="parse-row-{{ job.pk }}-{{ row_index }}">
+    <td class="font-mono muted">{{ record.row_number|default:row_index }}</td>
+    {% for field in record_fields %}
+        <td>
+            <form class="inline-edit-form"
+                  hx-post="{% url 'imports:record_update' job.pk row_index %}"
+                  hx-target="#parse-row-{{ job.pk }}-{{ row_index }}"
+                  hx-swap="outerHTML"
+                  hx-trigger="change delay:400ms">
+                {% csrf_token %}
+                <input type="hidden" name="field" value="{{ field }}">
+                <input type="text"
+                       name="value"
+                       value="{{ record|get_item:field }}"
+                       class="inline-edit-input font-mono"
+                       aria-label="{{ field }} row {{ row_index }}">
+            </form>
+        </td>
+    {% endfor %}
+</tr>

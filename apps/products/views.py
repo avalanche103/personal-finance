@@ -5,7 +5,6 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_http_methods
 
 from apps.accounts.models import Transaction
@@ -18,7 +17,7 @@ from apps.products.analytics import (
 )
 from apps.products.forms import ProductTokenTermsForm
 from apps.products.models import Product
-from apps.products.services.token_terms import estimate_next_income_date
+from apps.products.services.token_terms import estimate_next_income_date, income_payment_dates
 
 
 PRODUCT_SORT_FIELDS = ('name', 'institution', 'type', 'currency', 'units', 'value_usd', 'value_byn')
@@ -108,7 +107,7 @@ def _product_navigation(request, product: Product) -> dict:
             'nav_total': 0,
         }
 
-    nav_params = {**_detail_filter_params(request), **_product_list_nav_params(request)}
+    nav_params = _product_list_nav_params(request)
     return {
         'prev_product': ordered[index - 1] if index > 0 else None,
         'next_product': ordered[index + 1] if index < len(ordered) - 1 else None,
@@ -157,43 +156,22 @@ TOKEN_TERMS_UPDATE_FIELDS = (
 )
 
 
-def _detail_filter_params(request) -> dict[str, str]:
-    params = {}
-    raw_from = (request.GET.get('from') or request.POST.get('filter_from') or '').strip()
-    raw_to = (request.GET.get('to') or request.POST.get('filter_to') or '').strip()
-    if raw_from:
-        params['from'] = raw_from
-    if raw_to:
-        params['to'] = raw_to
-    return params
-
-
-def _build_product_detail_context(product: Product, filter_from, filter_to) -> dict:
+def _build_product_detail_context(product: Product) -> dict:
     all_transactions = list(
         Transaction.objects.filter(product=product)
         .select_related('account', 'currency')
         .order_by('occurred_at', 'id')
     )
-    filtered_transactions_qs = (
+    transactions = list(
         Transaction.objects.filter(product=product)
         .select_related('account', 'currency')
         .order_by('-occurred_at', '-id')
     )
-    currency_rates_qs = (
+    currency_rates = list(
         ExchangeRateHistory.objects.filter(currency=product.currency)
         .select_related('currency')
-        .order_by('-rate_date')
+        .order_by('-rate_date')[:20]
     )
-
-    if filter_from:
-        filtered_transactions_qs = filtered_transactions_qs.filter(occurred_at__date__gte=filter_from)
-        currency_rates_qs = currency_rates_qs.filter(rate_date__gte=filter_from)
-    if filter_to:
-        filtered_transactions_qs = filtered_transactions_qs.filter(occurred_at__date__lte=filter_to)
-        currency_rates_qs = currency_rates_qs.filter(rate_date__lte=filter_to)
-
-    transactions = list(filtered_transactions_qs)
-    currency_rates = list(currency_rates_qs[:20])
     position_summary = build_product_position_summary(
         all_transactions,
         product.market_value,
@@ -214,9 +192,6 @@ def _build_product_detail_context(product: Product, filter_from, filter_to) -> d
         'product_metadata': product.metadata.items() if isinstance(product.metadata, dict) else [],
         'position_summary': position_summary,
         'performance_summary': performance_summary,
-        'filter_from': filter_from.isoformat() if filter_from else '',
-        'filter_to': filter_to.isoformat() if filter_to else '',
-        'all_transaction_count': len(all_transactions),
     }
 
 
@@ -226,13 +201,6 @@ def product_detail(request, pk):
         Product.objects.select_related('institution', 'currency'),
         pk=pk,
     )
-    filter_from = parse_date(request.GET.get('from', '').strip()) if request.GET.get('from') else None
-    filter_to = parse_date(request.GET.get('to', '').strip()) if request.GET.get('to') else None
-    if request.method == 'POST' and request.POST.get('filter_from'):
-        filter_from = parse_date(request.POST.get('filter_from', '').strip()) or filter_from
-    if request.method == 'POST' and request.POST.get('filter_to'):
-        filter_to = parse_date(request.POST.get('filter_to', '').strip()) or filter_to
-
     terms_form = ProductTokenTermsForm(instance=product)
 
     if request.method == 'POST':
@@ -246,7 +214,7 @@ def product_detail(request, pk):
                 product.next_income_date = estimated
                 product.save(update_fields=['next_income_date', 'updated_at'])
                 messages.success(request, f'Next income date set to {estimated.isoformat()}.')
-            query = _detail_filter_params(request)
+            query = _product_list_nav_params(request)
             url = reverse('products:detail', args=[product.pk])
             return redirect(f'{url}?{urlencode(query)}' if query else url)
 
@@ -256,13 +224,15 @@ def product_detail(request, pk):
             updated_product.terms_updated_at = timezone.now()
             updated_product.save(update_fields=list(TOKEN_TERMS_UPDATE_FIELDS))
             messages.success(request, 'Token terms saved.')
-            query = _detail_filter_params(request)
+            query = _product_list_nav_params(request)
             url = reverse('products:detail', args=[product.pk])
             return redirect(f'{url}?{urlencode(query)}' if query else url)
 
         messages.error(request, 'Could not save token terms. Please fix the errors below.')
 
-    context = _build_product_detail_context(product, filter_from, filter_to)
+    context = _build_product_detail_context(product)
     context['terms_form'] = terms_form
+    context['estimated_next_income_date'] = estimate_next_income_date(product)
+    context['income_payment_count'] = len(income_payment_dates(product))
     context.update(_product_navigation(request, product))
     return render(request, 'products/detail.html', context)

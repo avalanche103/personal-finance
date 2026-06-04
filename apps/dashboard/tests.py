@@ -20,19 +20,22 @@ class DashboardSmokeTests(TestCase):
 		self.client = Client()
 
 	def test_dashboard_and_reports_render(self):
-		for url in ['/', '/exchange-rates/', '/portfolio-report/']:
+		for url in ['/', '/exchange-rates/', '/portfolio-report/', '/settings/']:
 			response = self.client.get(url)
 			self.assertEqual(response.status_code, 200, url)
 
 	def test_dashboard_contains_bootstrap_cards(self):
 		response = self.client.get('/')
-		self.assertContains(response, 'Latest NBRB rates')
+		self.assertContains(response, 'NBRB rates')
 		self.assertContains(response, 'USD')
 		self.assertContains(response, 'Finstore')
-		self.assertContains(response, 'Tracked groups')
-		self.assertContains(response, 'Manage products')
-		self.assertContains(response, 'Historical reporting')
-		self.assertContains(response, 'Portfolio report by date')
+		self.assertContains(response, 'Groups')
+		self.assertContains(response, 'All products')
+		self.assertContains(response, 'Period comparison')
+		self.assertContains(response, 'Recent operations')
+		self.assertContains(response, 'Operations calendar')
+		self.assertContains(response, 'portfolio-chart-data')
+		self.assertContains(response, 'plotly')
 		self.assertContains(response, 'Last day of previous month')
 		self.assertIn('product_groups', response.context)
 		self.assertIn('historical_reporting', response.context)

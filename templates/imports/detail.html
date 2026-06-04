@@ -1,0 +1,77 @@
+{% extends 'core/base.html' %}
+{% load pf_extras %}
+
+{% block title %}Import #{{ job.pk }} | {{ project_name }}{% endblock %}
+{% block page_title %}Import #{{ job.pk }}{% endblock %}
+
+{% block content %}
+<section class="stack-lg">
+    <article class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Job</p>
+                <h2>{{ job.source.name }}</h2>
+                <p class="muted font-mono">{{ job.original_filename|default:'Manual/API job' }} · {{ job.created_at|date:'Y-m-d H:i' }}</p>
+            </div>
+            <div class="form-actions">
+                <a class="button button-secondary" href="{% url 'imports:history' %}">History</a>
+                <a class="button button-secondary" href="{% url 'imports:upload' %}">New upload</a>
+            </div>
+        </div>
+
+        {% include 'imports/partials/job_progress.html' %}
+
+        {% if warnings %}
+            <div class="stack-md">
+                {% for warning in warnings %}
+                    <div class="message">{{ warning }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if metadata %}
+            <div class="info-grid">
+                {% for key, value in metadata.items %}
+                    <div class="info-card">
+                        <span>{{ key }}</span>
+                        <strong class="font-mono">{{ value }}</strong>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </article>
+
+    <article class="panel stack-md">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Parse results</p>
+                <h2>Editable rows</h2>
+            </div>
+            <span class="muted">{{ editable_records|length }} rows</span>
+        </div>
+        <p class="muted">Corrections are stored in the job record. Re-run import persistence from admin if you need DB replay.</p>
+
+        {% if editable_records %}
+            <div class="table-wrap">
+                <table class="data-table parse-results-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            {% for field in record_fields %}
+                                <th>{{ field }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody id="parse-results-body">
+                        {% for record in editable_records %}
+                            {% include 'imports/partials/parse_record_row.html' with row_index=forloop.counter0 record=record job=job record_fields=record_fields %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="empty-state">No parsed rows stored for this job.</p>
+        {% endif %}
+    </article>
+</section>
+{% endblock %}

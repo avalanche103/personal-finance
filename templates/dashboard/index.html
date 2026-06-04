@@ -1,22 +1,38 @@
 {% extends 'core/base.html' %}
+{% load static %}
 
 {% block title %}Dashboard | {{ project_name }}{% endblock %}
-{% block page_title %}Financial Overview{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+{% endblock %}
 
 {% block content %}
 <section class="stack-lg">
-    <div id="summary-cards" hx-get="{% url 'dashboard:summary' %}" hx-trigger="load, every 60s">
-        {% include 'dashboard/partials/summary_cards.html' %}
+    <div id="summary-row" hx-get="{% url 'dashboard:summary' %}" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        {% include 'dashboard/partials/summary_row.html' %}
     </div>
 
-    <section class="grid-two">
-        <article class="panel">
+    <section class="grid-12">
+        <article class="panel col-8 stack-md">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Portfolio</p>
+                    <h2>Value trend</h2>
+                </div>
+                <a href="{% url 'dashboard:portfolio_report' %}">Full report</a>
+            </div>
+            {% include 'dashboard/partials/portfolio_chart.html' %}
+        </article>
+
+        <article class="panel col-4">
             <div class="panel-header">
                 <div>
                     <p class="eyebrow">Institutions</p>
-                    <h2>Current map</h2>
+                    <h2>Overview</h2>
                 </div>
-                <a href="{% url 'institutions:list' %}">View all</a>
+                <a href="{% url 'institutions:list' %}">All</a>
             </div>
             <div class="mini-list">
                 {% for institution in institutions %}
@@ -25,39 +41,64 @@
                             <strong>{{ institution.name }}</strong>
                             <span>{{ institution.get_institution_type_display }} · {{ institution.country }}</span>
                         </div>
-                        <span>{{ institution.accounts.count }} accounts</span>
+                        <span class="font-mono">{{ institution.accounts.count }}</span>
                     </div>
                 {% empty %}
-                    <p class="empty-state">No institutions yet. Add them through admin or imports.</p>
+                    <p class="empty-state">No institutions yet.</p>
                 {% endfor %}
             </div>
         </article>
+    </section>
 
+    <section class="grid-two">
+        <article class="panel stack-md">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Ledger</p>
+                    <h2>Recent operations</h2>
+                </div>
+            </div>
+            {% include 'dashboard/partials/recent_transactions.html' %}
+        </article>
+
+        <article class="panel stack-md">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">Schedule</p>
+                    <h2>Operations calendar</h2>
+                </div>
+            </div>
+            <p class="muted">Upcoming income forecasts by product group · nearest dates first · 60-day window.</p>
+            {% include 'dashboard/partials/operations_calendar.html' %}
+        </article>
+    </section>
+
+    <section class="grid-two">
         <article class="panel">
             <div class="panel-header">
                 <div>
                     <p class="eyebrow">Imports</p>
-                    <h2>Recent activity</h2>
+                    <h2>Recent jobs</h2>
                 </div>
-                <a href="{% url 'imports:history' %}">View history</a>
+                <a href="{% url 'imports:history' %}">History</a>
             </div>
             <div id="recent-imports" hx-get="{% url 'dashboard:recent_imports' %}" hx-trigger="load, every 60s">
                 {% include 'dashboard/partials/recent_imports.html' %}
             </div>
         </article>
-    </section>
 
-    <section class="panel stack-md">
-        <div class="panel-header">
-            <div>
-                <p class="eyebrow">FX Monitor</p>
-                <h2>Latest NBRB rates</h2>
+        <article class="panel stack-md">
+            <div class="panel-header">
+                <div>
+                    <p class="eyebrow">FX</p>
+                    <h2>NBRB rates</h2>
+                </div>
+                <a href="{% url 'dashboard:exchange_rates' %}">History</a>
             </div>
-            <a href="{% url 'dashboard:exchange_rates' %}">Open full history</a>
-        </div>
-        <div id="latest-rates" hx-get="{% url 'dashboard:latest_rates' %}" hx-trigger="load, every 3600s">
-            {% include 'dashboard/partials/latest_rates.html' %}
-        </div>
+            <div id="latest-rates" hx-get="{% url 'dashboard:latest_rates' %}" hx-trigger="load, every 3600s">
+                {% include 'dashboard/partials/latest_rates.html' %}
+            </div>
+        </article>
     </section>
 
     <section class="grid-two">
@@ -65,18 +106,18 @@
             <div class="panel-header">
                 <div>
                     <p class="eyebrow">Accounts</p>
-                    <h2>Latest balances</h2>
+                    <h2>Balances</h2>
                 </div>
-                <a href="{% url 'accounts:list' %}">Manage accounts</a>
+                <a href="{% url 'accounts:list' %}">All accounts</a>
             </div>
             <div class="table-wrap">
-                <table>
+                <table class="data-table">
                     <thead>
                         <tr>
                             <th>Account</th>
                             <th>Institution</th>
-                            <th>Currency</th>
-                            <th class="text-right">Balance USD</th>
+                            <th>CCY</th>
+                            <th class="text-right">USD</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -84,8 +125,8 @@
                             <tr>
                                 <td>{{ account.name }}</td>
                                 <td>{{ account.institution.name }}</td>
-                                <td>{{ account.currency.code }}</td>
-                                <td class="text-right">{{ account.current_balance_usd|floatformat:2 }}</td>
+                                <td class="font-mono">{{ account.currency.code }}</td>
+                                <td class="text-right font-mono">{{ account.current_balance_usd|floatformat:2 }}</td>
                             </tr>
                         {% empty %}
                             <tr>
@@ -101,9 +142,9 @@
             <div class="panel-header">
                 <div>
                     <p class="eyebrow">Products</p>
-                    <h2>Tracked groups</h2>
+                    <h2>Groups</h2>
                 </div>
-                <a href="{% url 'products:list' %}">Manage products</a>
+                <a href="{% url 'products:list' %}">All products</a>
             </div>
             <div class="stack-md">
                 {% for group in product_groups %}
@@ -111,23 +152,22 @@
                         <summary>
                             <div>
                                 <strong>{{ group.label }}</strong>
-                                <div class="muted">{{ group.products|length }} products</div>
+                                <div class="muted font-mono">{{ group.products|length }} items</div>
                             </div>
                             <div class="text-right">
                                 {% include 'products/partials/group_summary_metrics.html' %}
                             </div>
                         </summary>
-
                         <div class="table-wrap">
-                            <table>
+                            <table class="data-table">
                                 <thead>
                                     <tr>
                                         <th>Product</th>
                                         <th>Type</th>
                                         {% if group.currency.code == 'BYN' %}
-                                            <th class="text-right">Value BYN</th>
+                                            <th class="text-right">BYN</th>
                                         {% endif %}
-                                        <th class="text-right">Value USD</th>
+                                        <th class="text-right">USD</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -136,9 +176,9 @@
                                             <td><a class="product-link" href="{% url 'products:detail' product.pk %}">{{ product.name }}</a></td>
                                             <td>{{ product.get_product_type_display }}</td>
                                             {% if group.currency.code == 'BYN' %}
-                                                <td class="text-right">{{ product.market_value|floatformat:2 }}</td>
+                                                <td class="text-right font-mono">{{ product.market_value|floatformat:2 }}</td>
                                             {% endif %}
-                                            <td class="text-right">{{ product.current_value_usd|floatformat:2 }}</td>
+                                            <td class="text-right font-mono">{{ product.current_value_usd|floatformat:2 }}</td>
                                         </tr>
                                     {% endfor %}
                                 </tbody>
@@ -152,36 +192,37 @@
         </article>
     </section>
 
-    <section class="panel stack-md">
+    <article class="panel stack-md">
         <div class="panel-header">
             <div>
-                <p class="eyebrow">Historical reporting</p>
-                <h2>Portfolio report by date</h2>
+                <p class="eyebrow">Reporting</p>
+                <h2>Period comparison</h2>
             </div>
             <a href="{% url 'dashboard:portfolio_report' %}">Open report</a>
         </div>
-
-        <p class="muted">Portfolio value as of {{ historical_reporting.as_of_date|date:'Y-m-d' }} compared to the last day of the previous month and the last day of the previous year.</p>
-
+        <p class="muted">As of {{ historical_reporting.as_of_date|date:'Y-m-d' }} vs prior month and year.</p>
         <section class="metric-grid compact-grid">
-            <article class="metric-card accent-gold">
-                <span>Portfolio total</span>
-                <strong>${{ historical_reporting.portfolio_usd|floatformat:2 }}</strong>
-                <small>As of {{ historical_reporting.as_of_date|date:'Y-m-d' }}</small>
+            <article class="metric-card metric-card--accent">
+                <span>Portfolio</span>
+                <strong class="metric-value font-mono">${{ historical_reporting.portfolio_usd|floatformat:2 }}</strong>
+                <small>Snapshot date</small>
             </article>
-            <article class="metric-card accent-blue">
-                <span>Accounts total</span>
-                <strong>${{ historical_reporting.accounts_total_usd|floatformat:2 }}</strong>
-                <small>Cash and account balances converted to USD</small>
+            <article class="metric-card metric-card--neutral">
+                <span>Accounts</span>
+                <strong class="metric-value font-mono">${{ historical_reporting.accounts_total_usd|floatformat:2 }}</strong>
+                <small>Cash and balances in USD</small>
             </article>
-            <article class="metric-card accent-green">
-                <span>Products total</span>
-                <strong>${{ historical_reporting.products_total_usd|floatformat:2 }}</strong>
-                <small>Units times current price in USD terms</small>
+            <article class="metric-card metric-card--success">
+                <span>Products</span>
+                <strong class="metric-value font-mono">${{ historical_reporting.products_total_usd|floatformat:2 }}</strong>
+                <small>Units × price in USD</small>
             </article>
         </section>
-
         {% include 'dashboard/partials/period_comparisons.html' with period_comparisons=historical_reporting.period_comparisons %}
-    </section>
+    </article>
 </section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/portfolio-chart.js' %}"></script>
 {% endblock %}

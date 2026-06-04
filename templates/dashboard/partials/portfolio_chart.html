@@ -1,0 +1,7 @@
+{% if portfolio_chart_json.values %}
+    <div id="portfolio-chart" class="chart-card plotly-chart" aria-label="Portfolio value trend"></div>
+    {{ portfolio_chart_json|json_script:"portfolio-chart-data" }}
+    <p class="muted">Weekly portfolio USD · {{ portfolio_chart_json.values|length }} points · hover for values</p>
+{% else %}
+    <p class="empty-state">Not enough history to render a chart yet.</p>
+{% endif %}

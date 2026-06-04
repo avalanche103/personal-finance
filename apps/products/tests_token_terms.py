@@ -11,8 +11,11 @@ from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
 from apps.products.models import Product
 from apps.products.services.token_terms import (
+	estimate_next_income_amount,
 	estimate_next_income_date,
 	import_token_terms_from_file,
+	infer_schedule_from_payment_dates,
+	income_payment_dates,
 	load_token_terms_rows,
 	recompute_next_income_dates,
 )
@@ -86,6 +89,70 @@ class TokenTermsServiceTests(TestCase):
 		self.assertEqual(self.product.next_income_date, date(2026, 5, 20))
 		transaction = Transaction.objects.get(product=self.product)
 		self.assertEqual(timezone.localdate(transaction.occurred_at), last_payment)
+
+	def test_estimate_next_income_amount_from_annual_rate(self):
+		self.product.annual_rate_pct = Decimal('19.00')
+		self.product.units = Decimal('10')
+		self.product.current_price = Decimal('100')
+		self.product.current_value_usd = Decimal('300')
+		self.product.income_schedule = Product.IncomeSchedule.MONTHLY
+		self.product.save()
+
+		amount, amount_usd = estimate_next_income_amount(self.product, payment_dates=[])
+		# 10 * 100 * 19% / 12 = 15.83
+		self.assertEqual(amount, Decimal('15.83'))
+		self.assertEqual(amount_usd, Decimal('4.75'))
+
+	def test_infer_monthly_schedule_from_payment_gaps(self):
+		dates = [date(2026, 2, 20), date(2026, 3, 20), date(2026, 4, 20)]
+		self.assertEqual(infer_schedule_from_payment_dates(dates), Product.IncomeSchedule.MONTHLY)
+
+	def test_forecast_without_preset_schedule(self):
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product,
+			currency=self.usd,
+			transaction_type=Transaction.TransactionType.INCOME,
+			amount=Decimal('1.00'),
+			quantity=Decimal('0'),
+			occurred_at=timezone.make_aware(datetime(2026, 3, 20, 3, 0, 0)),
+			import_fingerprint='token-terms-forecast-mar',
+			metadata={'operation_type': 'Получение дохода'},
+		)
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product,
+			currency=self.usd,
+			transaction_type=Transaction.TransactionType.INCOME,
+			amount=Decimal('1.10'),
+			quantity=Decimal('0'),
+			occurred_at=timezone.make_aware(datetime(2026, 4, 20, 3, 0, 0)),
+			import_fingerprint='token-terms-forecast-apr',
+			metadata={'operation_type': 'Получение дохода'},
+		)
+
+		self.assertEqual(len(income_payment_dates(self.product)), 2)
+		estimated = estimate_next_income_date(self.product, today=date(2026, 5, 1))
+		self.assertEqual(estimated, date(2026, 5, 20))
+
+		updated = recompute_next_income_dates(self.finstore, overwrite=True, today=date(2026, 5, 1))
+		self.product.refresh_from_db()
+		self.assertEqual(updated, 1)
+		self.assertEqual(self.product.income_schedule, Product.IncomeSchedule.MONTHLY)
+		self.assertEqual(self.product.next_income_date, date(2026, 5, 20))
+
+	def test_csv_next_income_is_not_applied_from_file(self):
+		csv_body = (
+			'external_id,next_income_date\n'
+			'SMART_(BYN_868),2099-01-01\n'
+		)
+		with TemporaryDirectory() as tmp:
+			path = Path(tmp) / 'terms.csv'
+			path.write_text(csv_body, encoding='utf-8')
+			import_token_terms_from_file(path, recompute_dates=False)
+
+		self.product.refresh_from_db()
+		self.assertIsNone(self.product.next_income_date)
 
 	def test_load_token_terms_rows_supports_russian_headers(self):
 		csv_body = (

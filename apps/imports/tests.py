@@ -68,6 +68,8 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertTrue(created)
 		self.assertEqual(job.status, ImportJob.Status.SAVED)
 		self.assertEqual(job.records_created, 7)
+		self.assertIn('editable_records', job.details)
+		self.assertGreaterEqual(len(job.details['editable_records']), 5)
 
 		products = Product.objects.filter(institution=source.institution, external_id__in=['YOWHEELS_(USD_864)', 'SMART_(BYN_868)']).order_by('external_id')
 		self.assertEqual(products.count(), 2)
@@ -194,7 +196,8 @@ class ImportPipelineSmokeTests(TestCase):
 			},
 		)
 
-		self.assertEqual(response.status_code, 302)
+		job = ImportJob.objects.filter(source=source).order_by('-created_at').first()
+		self.assertRedirects(response, reverse('imports:detail', args=[job.pk]))
 		self.assertEqual(ImportJob.objects.filter(source=source).count(), 1)
 
 	def test_finstore_clipboard_income_does_not_close_existing_position(self):

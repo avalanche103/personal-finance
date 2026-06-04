@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.imports.models import ImportJob, RawImportFile
+from apps.imports.services.details import build_job_details
 from apps.imports.services.parsers.base import ParseResult
 from apps.imports.services.parsers.pdf import PDFImportParser
 from apps.imports.services.parsers.text import TextImportParser
@@ -74,7 +75,7 @@ def process_uploaded_import(source, uploaded_file):
             records_created = parser.persist(raw_import_file, result) if parser else 0
             job.status = ImportJob.Status.VALIDATED
             job.rows_detected = int(result.metadata.get('rows', len(result.records)))
-            job.details = result.to_dict()
+            job.details = build_job_details(result)
             job.records_created = records_created
             job.status = ImportJob.Status.SAVED
             job.finished_at = timezone.now()

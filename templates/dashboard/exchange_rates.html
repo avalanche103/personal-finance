@@ -51,9 +51,9 @@ function renderExchangeRateChart() {
         type: 'line',
         data: {
             datasets: [
-                {label: 'USD', data: payload.USD, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,0.15)', tension: 0.25},
-                {label: 'EUR', data: payload.EUR, borderColor: '#b7791f', backgroundColor: 'rgba(183,121,31,0.15)', tension: 0.25},
-                {label: 'RUB', data: payload.RUB, borderColor: '#285e61', backgroundColor: 'rgba(40,94,97,0.15)', tension: 0.25},
+                {label: 'USD', data: payload.USD, borderColor: '#0066CC', backgroundColor: 'rgba(0,102,204,0.08)', tension: 0.1, borderWidth: 2, pointRadius: 0},
+                {label: 'EUR', data: payload.EUR, borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.08)', tension: 0.1, borderWidth: 2, pointRadius: 0},
+                {label: 'RUB', data: payload.RUB, borderColor: '#6B7280', backgroundColor: 'rgba(107,114,128,0.08)', tension: 0.1, borderWidth: 2, pointRadius: 0},
             ],
         },
         options: {

@@ -1,0 +1,30 @@
+<div class="table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Account</th>
+                <th>Type</th>
+                <th>Description</th>
+                <th class="text-right">Amount USD</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tx in recent_transactions %}
+                <tr>
+                    <td class="font-mono">{{ tx.occurred_at|date:'Y-m-d' }}</td>
+                    <td>{{ tx.account.name }}</td>
+                    <td>{{ tx.get_transaction_type_display }}</td>
+                    <td>{{ tx.description|default:'—'|truncatechars:48 }}</td>
+                    <td class="text-right font-mono {% if tx.amount_usd < 0 %}delta-down{% elif tx.amount_usd > 0 %}delta-up{% endif %}">
+                        {{ tx.amount_usd|floatformat:2 }}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="5" class="empty-state">No transactions recorded yet.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

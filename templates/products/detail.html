@@ -39,19 +39,6 @@
             <a class="button button-secondary" href="{% url 'products:list' %}{% if nav_query %}?{{ nav_query }}{% endif %}">Back to products</a>
         </div>
 
-        <form class="filter-bar" method="get">
-            <label class="filter-field">
-                <span>From</span>
-                <input type="date" name="from" value="{{ filter_from }}">
-            </label>
-            <label class="filter-field">
-                <span>To</span>
-                <input type="date" name="to" value="{{ filter_to }}">
-            </label>
-            <button class="button" type="submit">Apply filters</button>
-            <a class="button button-secondary" href="{% url 'products:detail' product.pk %}">Reset</a>
-        </form>
-
         <div class="info-grid">
             <div class="info-card">
                 <span>Current value</span>
@@ -179,7 +166,7 @@
         <div>
             <p class="eyebrow">Operations</p>
             <h2>Transactions</h2>
-            <p class="muted">Showing {{ transaction_count }} of {{ all_transaction_count }} transactions for this product.</p>
+            <p class="muted">{{ transaction_count }} transactions for this product.</p>
         </div>
 
         <div class="table-wrap">

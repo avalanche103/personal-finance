@@ -5,9 +5,10 @@ import json
 import re
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
+from statistics import median
 
 from django.utils import timezone
 
@@ -229,9 +230,7 @@ def apply_terms_to_product(product: Product, row: TokenTermsRow, *, update_times
 		product.income_schedule = row.income_schedule
 		changed_fields.append('income_schedule')
 
-	if row.next_income_date is not None and product.next_income_date != row.next_income_date:
-		product.next_income_date = row.next_income_date
-		changed_fields.append('next_income_date')
+	# next_income_date is always derived from income history, not imported files.
 
 	if changed_fields:
 		if update_timestamp:
@@ -258,46 +257,190 @@ def schedule_month_delta(schedule: str) -> int | None:
 	}.get(schedule)
 
 
+def schedule_payments_per_year(schedule: str) -> int | None:
+	return {
+		Product.IncomeSchedule.MONTHLY: 12,
+		Product.IncomeSchedule.QUARTERLY: 4,
+		Product.IncomeSchedule.SEMI_ANNUAL: 2,
+		Product.IncomeSchedule.ANNUAL: 1,
+	}.get(schedule)
+
+
+def estimate_next_income_amount(
+	product: Product,
+	*,
+	payment_dates: list[date] | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
+	"""Coupon per period from annual_rate_pct, units, and price. Returns (native, usd)."""
+	if product.annual_rate_pct is None or product.annual_rate_pct <= 0:
+		return None, None
+
+	principal = product.market_value
+	if principal <= 0:
+		return None, None
+
+	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product)
+	schedule = resolve_income_schedule(product, payment_dates)
+	if schedule == Product.IncomeSchedule.AT_MATURITY:
+		return None, None
+
+	periods_per_year = schedule_payments_per_year(schedule)
+	if periods_per_year is None:
+		return None, None
+
+	period_income = (
+		principal * product.annual_rate_pct / Decimal('100') / Decimal(periods_per_year)
+	).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+	amount_usd = None
+	if product.current_value_usd and product.current_value_usd > 0:
+		amount_usd = (
+			product.current_value_usd * product.annual_rate_pct / Decimal('100') / Decimal(periods_per_year)
+		).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	elif getattr(product, 'currency', None) is not None and product.currency.usd_rate:
+		amount_usd = (period_income * product.currency.usd_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+	return period_income, amount_usd
+
+
+def is_income_transaction(transaction: Transaction) -> bool:
+	operation_type = ''
+	if isinstance(transaction.metadata, dict):
+		operation_type = transaction.metadata.get('operation_type', '')
+	if operation_type == FINSTORE_INCOME_OPERATION:
+		return True
+	return (
+		transaction.transaction_type == Transaction.TransactionType.INCOME
+		and not (transaction.quantity or 0)
+	)
+
+
+def income_payment_dates(product: Product) -> list[date]:
+	dates: list[date] = []
+	seen: set[date] = set()
+	for tx in Transaction.objects.filter(product=product).order_by('occurred_at', 'id'):
+		if not is_income_transaction(tx):
+			continue
+		payment_date = timezone.localdate(tx.occurred_at)
+		if payment_date not in seen:
+			seen.add(payment_date)
+			dates.append(payment_date)
+	return dates
+
+
 def last_income_payment_date(product: Product) -> date | None:
-	transactions = Transaction.objects.filter(product=product).order_by('-occurred_at', '-id')
-	for tx in transactions:
-		operation_type = ''
-		if isinstance(tx.metadata, dict):
-			operation_type = tx.metadata.get('operation_type', '')
-		if operation_type == FINSTORE_INCOME_OPERATION or (
-			tx.transaction_type == Transaction.TransactionType.INCOME and not (tx.quantity or 0)
-		):
-			return timezone.localdate(tx.occurred_at)
-	return None
+	dates = income_payment_dates(product)
+	return dates[-1] if dates else None
+
+
+def infer_schedule_from_payment_dates(dates: list[date]) -> str:
+	if len(dates) < 2:
+		return ''
+
+	gaps = [(later - earlier).days for earlier, later in zip(dates, dates[1:]) if (later - earlier).days > 0]
+	if not gaps:
+		return ''
+
+	median_gap = int(median(gaps))
+	if 25 <= median_gap <= 38:
+		return Product.IncomeSchedule.MONTHLY
+	if 80 <= median_gap <= 100:
+		return Product.IncomeSchedule.QUARTERLY
+	if 170 <= median_gap <= 200:
+		return Product.IncomeSchedule.SEMI_ANNUAL
+	if 350 <= median_gap <= 380:
+		return Product.IncomeSchedule.ANNUAL
+	return ''
+
+
+def typical_income_day_of_month(dates: list[date]) -> int | None:
+	if not dates:
+		return None
+	return int(median([payment.day for payment in dates]))
+
+
+def _date_on_day(year: int, month: int, day: int) -> date:
+	return date(year, month, min(day, monthrange(year, month)[1]))
+
+
+def _advance_by_gap(last_payment: date, gap_days: int, typical_day: int | None, reference: date) -> date:
+	candidate = last_payment + timedelta(days=gap_days)
+	if typical_day is not None:
+		candidate = _date_on_day(candidate.year, candidate.month, typical_day)
+	while candidate < reference:
+		candidate = candidate + timedelta(days=gap_days)
+		if typical_day is not None:
+			candidate = _date_on_day(candidate.year, candidate.month, typical_day)
+	return candidate
+
+
+def resolve_income_schedule(product: Product, payment_dates: list[date]) -> str:
+	if product.income_schedule and product.income_schedule != Product.IncomeSchedule.OTHER:
+		return product.income_schedule
+	inferred = infer_schedule_from_payment_dates(payment_dates)
+	return inferred or product.income_schedule
+
+
+def maybe_update_income_schedule_from_history(product: Product, payment_dates: list[date]) -> bool:
+	if product.income_schedule and product.income_schedule != Product.IncomeSchedule.OTHER:
+		return False
+	inferred = infer_schedule_from_payment_dates(payment_dates)
+	if not inferred:
+		return False
+	product.income_schedule = inferred
+	product.save(update_fields=['income_schedule', 'updated_at'])
+	return True
 
 
 def estimate_next_income_date(product: Product, *, today: date | None = None) -> date | None:
-	if not product.income_schedule or product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
-		return None
-
-	month_delta = schedule_month_delta(product.income_schedule)
-	if month_delta is None:
-		return None
-
-	last_payment = last_income_payment_date(product)
 	reference = today or timezone.localdate()
-	if last_payment is None:
+	payment_dates = income_payment_dates(product)
+
+	if product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
+		if product.maturity_date and product.maturity_date >= reference:
+			return product.maturity_date
 		return None
 
-	candidate = _add_months(last_payment, month_delta)
-	while candidate < reference:
-		candidate = _add_months(candidate, month_delta)
-	return candidate
+	if not payment_dates:
+		return None
+
+	schedule = resolve_income_schedule(product, payment_dates)
+	typical_day = typical_income_day_of_month(payment_dates)
+	last_payment = payment_dates[-1]
+
+	if schedule == Product.IncomeSchedule.AT_MATURITY:
+		if product.maturity_date and product.maturity_date >= reference:
+			return product.maturity_date
+		return None
+
+	month_delta = schedule_month_delta(schedule)
+	if month_delta is not None:
+		candidate = _add_months(last_payment, month_delta)
+		if typical_day is not None:
+			candidate = _date_on_day(candidate.year, candidate.month, typical_day)
+		while candidate < reference:
+			candidate = _add_months(candidate, month_delta)
+			if typical_day is not None:
+				candidate = _date_on_day(candidate.year, candidate.month, typical_day)
+		return candidate
+
+	if len(payment_dates) >= 2:
+		gaps = [(later - earlier).days for earlier, later in zip(payment_dates, payment_dates[1:]) if (later - earlier).days > 0]
+		if gaps:
+			gap_days = max(int(median(gaps)), 1)
+			return _advance_by_gap(last_payment, gap_days, typical_day, reference)
+
+	return None
 
 
 def recompute_next_income_dates(
 	institution: FinancialInstitution | None = None,
 	*,
-	overwrite: bool = False,
+	overwrite: bool = True,
 	product_ids: list[int] | None = None,
 	today: date | None = None,
 ) -> int:
-	queryset = Product.objects.filter(is_active=True).exclude(income_schedule='')
+	queryset = Product.objects.filter(is_active=True, product_type=Product.ProductType.TOKEN)
 	if institution is not None:
 		queryset = queryset.filter(institution=institution)
 	if product_ids:
@@ -305,13 +448,26 @@ def recompute_next_income_dates(
 
 	updated = 0
 	for product in queryset:
+		payment_dates = income_payment_dates(product)
+		if not payment_dates and not product.income_schedule:
+			continue
+
+		maybe_update_income_schedule_from_history(product, payment_dates)
+
 		if product.next_income_date and not overwrite:
 			continue
+
 		estimated = estimate_next_income_date(product, today=today)
 		if estimated is None:
+			if overwrite and product.next_income_date is not None:
+				product.next_income_date = None
+				product.save(update_fields=['next_income_date', 'updated_at'])
+				updated += 1
 			continue
+
 		if product.next_income_date == estimated:
 			continue
+
 		product.next_income_date = estimated
 		product.save(update_fields=['next_income_date', 'updated_at'])
 		updated += 1
@@ -324,7 +480,7 @@ def import_token_terms_from_file(
 	institution_slug: str = 'finstore',
 	dry_run: bool = False,
 	recompute_dates: bool = True,
-	overwrite_next_dates: bool = False,
+	overwrite_next_dates: bool = True,
 ) -> TokenTermsImportResult:
 	institution = resolve_finstore_institution(institution_slug)
 	rows = load_token_terms_rows(path)

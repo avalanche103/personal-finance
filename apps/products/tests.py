@@ -326,7 +326,7 @@ class ProductViewsTests(TestCase):
 		self.assertContains(response, 'Total return %')
 		self.assertContains(response, 'XIRR')
 
-	def test_product_detail_filters_transactions_by_date_and_shows_position_summary(self):
+	def test_product_detail_shows_all_transactions_and_position_summary(self):
 		old_trade = Transaction.objects.create(
 			account=self.account,
 			product=self.product_usd,
@@ -354,13 +354,10 @@ class ProductViewsTests(TestCase):
 			description='Recent redemption',
 		)
 
-		response = self.client.get(
-			reverse('products:detail', args=[self.product_usd.pk]),
-			{'from': (timezone.localdate() - timedelta(days=5)).isoformat()},
-		)
+		response = self.client.get(reverse('products:detail', args=[self.product_usd.pk]))
 
 		self.assertEqual(response.status_code, 200)
-		self.assertNotContains(response, old_trade.description)
+		self.assertContains(response, old_trade.description)
 		self.assertContains(response, recent_redemption.description)
 		self.assertContains(response, 'Average entry price')
 		self.assertEqual(response.context['position_summary']['avg_entry_price'], Decimal('100'))

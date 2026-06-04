@@ -1,7 +1,7 @@
 {% extends 'core/base.html' %}
 
-{% block title %}Import Upload | {{ project_name }}{% endblock %}
-{% block page_title %}Import Upload{% endblock %}
+{% block title %}Imports | {{ project_name }}{% endblock %}
+{% block page_title %}Imports{% endblock %}
 
 {% block content %}
 <section class="grid-two">
@@ -9,8 +9,13 @@
         <div class="panel-header">
             <div>
                 <p class="eyebrow">Pipeline</p>
-                <h2>Upload raw file</h2>
+                <h2>Upload file</h2>
             </div>
+        </div>
+
+        <div class="upload-zone">
+            <strong>Drop file or paste clipboard data</strong>
+            <p class="muted">XLS/XLSX, PDF preview, API jobs, Finstore TSV paste.</p>
         </div>
 
         <form method="post" enctype="multipart/form-data" class="stack-md">
@@ -30,25 +35,35 @@
             {% if form.non_field_errors %}
                 <div class="message error">{{ form.non_field_errors }}</div>
             {% endif %}
-            <button type="submit" class="button">Create import job</button>
+            <div class="form-actions">
+                <button type="submit" class="button">Create import job</button>
+                <a class="button button-secondary" href="{% url 'imports:history' %}">View history</a>
+            </div>
         </form>
 
-        <div class="note-card">
-            <strong>Supported now</strong>
-            <p>XLS/XLSX preview via pandas/openpyxl, PDF preview layer via pypdf, API integrations as adapters, and Finstore clipboard paste for tab-separated rows.</p>
-        </div>
+        {% if active_job %}
+            <div>
+                <p class="eyebrow">Active job · #{{ active_job.pk }}</p>
+                {% include 'imports/partials/job_progress.html' with job=active_job progress=active_progress %}
+                <p class="muted"><a href="{% url 'imports:detail' active_job.pk %}">Open job detail</a></p>
+            </div>
+        {% endif %}
     </article>
 
     <article class="panel stack-md">
         <div class="panel-header">
             <div>
-                <p class="eyebrow">Latest jobs</p>
-                <h2>Recent uploads</h2>
+                <p class="eyebrow">Queue</p>
+                <h2>Recent jobs</h2>
             </div>
-            <a href="{% url 'imports:history' %}">Open history</a>
+            <a href="{% url 'imports:history' %}">Full history</a>
         </div>
-
-        {% include 'imports/partials/history_table.html' with jobs=recent_jobs %}
+        <div id="import-recent-jobs"
+             hx-get="{% url 'imports:history' %}"
+             hx-swap="innerHTML"
+             hx-trigger="load, every 10s">
+            {% include 'imports/partials/history_table.html' with jobs=recent_jobs %}
+        </div>
     </article>
 </section>
 {% endblock %}

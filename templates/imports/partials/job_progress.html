@@ -1,0 +1,18 @@
+<div id="job-progress-{{ job.pk }}"
+     {% if not progress.is_terminal %}
+         hx-get="{% url 'imports:progress' job.pk %}"
+         hx-trigger="every 2s"
+         hx-swap="outerHTML"
+     {% endif %}>
+    <div class="progress-header">
+        <span class="status-chip status-{{ job.status }}">{{ progress.status_display }}</span>
+        <span class="muted font-mono">{{ progress.percent }}%</span>
+    </div>
+    <div class="progress-track" role="progressbar" aria-valuenow="{{ progress.percent }}" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress-bar{% if job.status == 'failed' %} progress-bar--danger{% endif %}" style="width: {{ progress.percent }}%"></div>
+    </div>
+    <p class="muted">{{ progress.label }}{% if progress.rows_detected %} · {{ progress.rows_detected }} rows{% endif %}{% if progress.records_created %} · {{ progress.records_created }} saved{% endif %}</p>
+    {% if job.error_message %}
+        <p class="field-error">{{ job.error_message }}</p>
+    {% endif %}
+</div>

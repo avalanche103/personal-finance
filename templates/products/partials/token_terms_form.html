@@ -1,7 +1,5 @@
 <form method="post" class="stack-md token-terms-form">
     {% csrf_token %}
-    <input type="hidden" name="filter_from" value="{{ filter_from }}">
-    <input type="hidden" name="filter_to" value="{{ filter_to }}">
 
     <div class="filter-bar token-terms-fields">
         <label class="filter-field">
@@ -28,6 +26,9 @@
         <label class="filter-field">
             <span>{{ terms_form.next_income_date.label }}</span>
             {{ terms_form.next_income_date }}
+            {% if estimated_next_income_date %}
+                <small class="muted">Forecast from history: <span class="font-mono">{{ estimated_next_income_date|date:'Y-m-d' }}</span></small>
+            {% endif %}
             {% if terms_form.next_income_date.errors %}
                 <span class="field-error">{{ terms_form.next_income_date.errors|join:', ' }}</span>
             {% endif %}

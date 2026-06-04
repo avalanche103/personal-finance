@@ -8,6 +8,14 @@ from math import isfinite
 from apps.accounts.models import Transaction
 
 
+def product_group_label(institution_name: str, currency_code: str) -> str:
+    return f'{institution_name}_{currency_code}'
+
+
+def product_group_key(product) -> tuple[str, str]:
+    return product.institution.name, product.currency.code
+
+
 def build_product_transaction_map(product_ids: list[int]) -> dict[int, list[Transaction]]:
     transaction_map: dict[int, list[Transaction]] = defaultdict(list)
     if not product_ids:
@@ -201,7 +209,7 @@ def build_product_groups(
     transaction_map = transaction_map or {}
     grouped = OrderedDict()
     for product in products:
-        group_key = (product.institution.name, product.currency.code)
+        group_key = product_group_key(product)
         market_value = product.market_value or Decimal('0')
         market_value_usd = product.current_value_usd or Decimal('0')
         product_transactions = transaction_map.get(product.id, [])
@@ -215,7 +223,7 @@ def build_product_groups(
 
         if group_key not in grouped:
             grouped[group_key] = {
-                'label': f'{product.institution.name}_{product.currency.code}',
+                'label': product_group_label(*group_key),
                 'institution': product.institution,
                 'currency': product.currency,
                 'products': [],

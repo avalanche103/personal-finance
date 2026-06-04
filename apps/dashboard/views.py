@@ -6,13 +6,30 @@ from django.db.models.functions import Coalesce
 from django.shortcuts import render
 from django.utils import timezone
 
-from apps.accounts.models import Account, BalanceSnapshot
+from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
 from apps.imports.models import ImportJob
 from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import build_product_groups, build_product_transaction_map
 from apps.products.models import Product
+from apps.products.operations_calendar import build_operations_calendar
+
+
+def _portfolio_chart_points(as_of_date: date, weeks: int = 26) -> list[dict]:
+    points = []
+    for offset in range(weeks - 1, -1, -1):
+        point_date = as_of_date - timedelta(days=offset * 7)
+        snapshot = _historical_portfolio_context(point_date)
+        points.append({'date': point_date, 'value': float(snapshot['portfolio_usd'])})
+    return points
+
+
+def _portfolio_chart_payload(points: list[dict]) -> dict:
+    return {
+        'dates': [point['date'].isoformat() for point in points],
+        'values': [point['value'] for point in points],
+    }
 
 
 def _dashboard_metrics():
@@ -184,12 +201,18 @@ def dashboard_home(request):
     historical_report = _historical_portfolio_context(as_of_date)
     products = list(Product.objects.select_related('institution', 'currency').filter(is_active=True).order_by('institution__name', 'currency__code', 'name'))
     product_transaction_map = build_product_transaction_map([product.id for product in products])
+    metrics = _dashboard_metrics()
+    chart_points = _portfolio_chart_points(as_of_date)
     context = {
-        'metrics': _dashboard_metrics(),
+        'metrics': metrics,
+        'portfolio_chart_points': chart_points,
+        'portfolio_chart_json': _portfolio_chart_payload(chart_points),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
         'accounts': Account.objects.select_related('institution', 'currency').order_by('name')[:8],
         'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=as_of_date),
         'recent_imports': ImportJob.objects.select_related('source').order_by('-created_at')[:5],
+        'recent_transactions': Transaction.objects.select_related('account', 'currency', 'product').order_by('-occurred_at')[:12],
+        'operations_calendar': build_operations_calendar(products, today=as_of_date),
         'latest_rate_cards': _latest_rate_cards(),
         'historical_reporting': {
             **historical_report,
@@ -200,7 +223,11 @@ def dashboard_home(request):
 
 
 def dashboard_summary(request):
-    return render(request, 'dashboard/partials/summary_cards.html', {'metrics': _dashboard_metrics()})
+    return render(
+        request,
+        'dashboard/partials/summary_row.html',
+        {'metrics': _dashboard_metrics()},
+    )
 
 
 def dashboard_recent_imports(request):

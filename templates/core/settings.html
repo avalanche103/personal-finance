@@ -1,0 +1,46 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Settings | {{ project_name }}{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<section class="stack-lg">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <p class="eyebrow">Configuration</p>
+                <h2>Workspace</h2>
+            </div>
+        </div>
+        <div class="info-grid">
+            <div class="info-card">
+                <span>Reporting currency</span>
+                <strong class="font-mono">{{ reporting_base_currency }}</strong>
+            </div>
+            <div class="info-card">
+                <span>Environment</span>
+                <strong>Local MVP</strong>
+            </div>
+        </div>
+    </article>
+
+    <section class="settings-grid">
+        <a class="settings-link-card" href="{% url 'dashboard:exchange_rates' %}">
+            <strong>Exchange rates</strong>
+            <span>NBRB USD, EUR, RUB history and charts.</span>
+        </a>
+        <a class="settings-link-card" href="{% url 'dashboard:portfolio_report' %}">
+            <strong>Portfolio report</strong>
+            <span>Historical portfolio breakdown by date.</span>
+        </a>
+        <a class="settings-link-card" href="{% url 'imports:history' %}">
+            <strong>Import history</strong>
+            <span>Audit trail for all import jobs.</span>
+        </a>
+        <a class="settings-link-card" href="/admin/">
+            <strong>Django admin</strong>
+            <span>Data model editing and advanced configuration.</span>
+        </a>
+    </section>
+</section>
+{% endblock %}

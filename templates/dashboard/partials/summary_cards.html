@@ -1,22 +1,22 @@
 <section class="metric-grid">
-    <article class="metric-card accent-gold">
-        <span>Portfolio total</span>
-        <strong>${{ metrics.portfolio_usd|floatformat:2 }}</strong>
-        <small>Accounts and products converted to USD.</small>
-    </article>
-    <article class="metric-card accent-blue">
+    <article class="metric-card metric-card--accent">
         <span>Institutions</span>
-        <strong>{{ metrics.institutions_count }}</strong>
-        <small>Top-level ownership points for your data.</small>
+        <strong class="metric-value">{{ metrics.institutions_count }}</strong>
+        <small>Ownership points in the data model.</small>
     </article>
-    <article class="metric-card accent-green">
+    <article class="metric-card metric-card--neutral">
         <span>Accounts</span>
-        <strong>{{ metrics.accounts_count }}</strong>
-        <small>Banking, brokerage, deposits, wallets and cash.</small>
+        <strong class="metric-value">{{ metrics.accounts_count }}</strong>
+        <small>Banking, brokerage, deposits, wallets.</small>
     </article>
-    <article class="metric-card accent-orange">
+    <article class="metric-card metric-card--success">
         <span>Products</span>
-        <strong>{{ metrics.products_count }}</strong>
-        <small>Assets linked to institutions, not to accounts.</small>
+        <strong class="metric-value">{{ metrics.products_count }}</strong>
+        <small>Active assets linked to institutions.</small>
+    </article>
+    <article class="metric-card metric-card--warning">
+        <span>Base currency</span>
+        <strong class="metric-value font-mono">{{ reporting_base_currency }}</strong>
+        <small>All USD totals use converted values.</small>
     </article>
 </section>

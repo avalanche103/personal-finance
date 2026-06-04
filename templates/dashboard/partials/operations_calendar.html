@@ -1,0 +1,89 @@
+{% if operations_calendar %}
+
+    <div class="operations-calendar">
+
+        {% for day in operations_calendar %}
+
+            <section class="calendar-day calendar-day--future{% if day.is_today %} calendar-day--today{% endif %}">
+
+                <header class="calendar-day-header">
+
+                    <strong class="font-mono">{{ day.date|date:'Y-m-d' }}</strong>
+
+                    {% if day.is_today %}
+
+                        <span class="status-chip status-validated">Today</span>
+
+                    {% elif day.days_until == 1 %}
+
+                        <span class="status-chip status-pending">Tomorrow</span>
+
+                    {% else %}
+
+                        <span class="muted font-mono">in {{ day.days_until }}d</span>
+
+                    {% endif %}
+
+                </header>
+
+
+
+                {% for group in day.groups %}
+
+                    <details class="calendar-group" open>
+
+                        <summary>
+
+                            <strong>{{ group.label }}</strong>
+
+                            <span class="muted font-mono">{{ group.events|length }}</span>
+
+                        </summary>
+
+                        <ul class="calendar-events">
+
+                            {% for event in group.events %}
+
+                                <li class="calendar-event calendar-event--forecast">
+
+                                    <div class="calendar-event-main">
+
+                                        <a class="product-link" href="{% url 'products:detail' event.product.pk %}">{{ event.product_name }}</a>
+
+                                        <span class="muted">{{ event.transaction_type }}{% if event.operation_type %} · {{ event.operation_type }}{% endif %}</span>
+
+                                    </div>
+
+                                    <div class="calendar-event-meta font-mono">
+                                        {% if event.amount is not None %}
+                                            {{ event.amount|floatformat:2 }} {{ event.currency_code }}
+                                            {% if event.amount_usd %}
+                                                <span class="muted">({{ event.amount_usd|floatformat:2 }} USD)</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="muted">Next income (est.)</span>
+                                        {% endif %}
+                                    </div>
+
+                                </li>
+
+                            {% endfor %}
+
+                        </ul>
+
+                    </details>
+
+                {% endfor %}
+
+            </section>
+
+        {% endfor %}
+
+    </div>
+
+{% else %}
+
+    <p class="empty-state">No upcoming income dates in the next 60 days. Import payment history to enable forecasts.</p>
+
+{% endif %}
+

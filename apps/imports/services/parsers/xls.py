@@ -220,6 +220,13 @@ class XLSImportParser(BaseImportParser):
             token_names=sorted(token_summaries.keys()),
         )
 
+        from apps.products.services.token_terms import recompute_next_income_dates
+
+        result.metadata['next_income_dates_updated'] = recompute_next_income_dates(
+            institution,
+            overwrite=True,
+        )
+
         result.metadata['products_created'] = products_created
         result.metadata['transactions_created'] = transactions_created
         result.metadata['accounts_synced'] = accounts_synced
