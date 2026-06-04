@@ -1,0 +1,52 @@
+<form method="post" class="stack-md token-terms-form">
+    {% csrf_token %}
+    <input type="hidden" name="filter_from" value="{{ filter_from }}">
+    <input type="hidden" name="filter_to" value="{{ filter_to }}">
+
+    <div class="filter-bar token-terms-fields">
+        <label class="filter-field">
+            <span>{{ terms_form.annual_rate_pct.label }}</span>
+            {{ terms_form.annual_rate_pct }}
+            {% if terms_form.annual_rate_pct.errors %}
+                <span class="field-error">{{ terms_form.annual_rate_pct.errors|join:', ' }}</span>
+            {% endif %}
+        </label>
+        <label class="filter-field">
+            <span>{{ terms_form.maturity_date.label }}</span>
+            {{ terms_form.maturity_date }}
+            {% if terms_form.maturity_date.errors %}
+                <span class="field-error">{{ terms_form.maturity_date.errors|join:', ' }}</span>
+            {% endif %}
+        </label>
+        <label class="filter-field">
+            <span>{{ terms_form.income_schedule.label }}</span>
+            {{ terms_form.income_schedule }}
+            {% if terms_form.income_schedule.errors %}
+                <span class="field-error">{{ terms_form.income_schedule.errors|join:', ' }}</span>
+            {% endif %}
+        </label>
+        <label class="filter-field">
+            <span>{{ terms_form.next_income_date.label }}</span>
+            {{ terms_form.next_income_date }}
+            {% if terms_form.next_income_date.errors %}
+                <span class="field-error">{{ terms_form.next_income_date.errors|join:', ' }}</span>
+            {% endif %}
+        </label>
+    </div>
+
+    {% if terms_form.non_field_errors %}
+        <div class="message error">{{ terms_form.non_field_errors }}</div>
+    {% endif %}
+
+    <div class="form-actions">
+        <button type="submit" class="button" name="action" value="save_terms">Save terms</button>
+        <button type="submit" class="button button-secondary" name="action" value="recompute_next_income">
+            Estimate next income date
+        </button>
+    </div>
+
+    <p class="muted">
+        Finstore token ID: {{ product.finstore_token_id|default:'—' }}.
+        {% if product.terms_updated_at %}Last saved {{ product.terms_updated_at|date:'Y-m-d H:i' }}.{% endif %}
+    </p>
+</form>

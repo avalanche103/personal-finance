@@ -81,6 +81,25 @@ python manage.py bootstrap_local_data
 - Она создает `USD`, `EUR`, `RUB`, `BYN`, два demo-института, базовые import sources, demo accounts, products, transactions и snapshots.
 - Команда идемпотентна и подходит для повторного запуска на локальной SQLite-базе.
 
+## Условия токенов Finstore (ставка, срок, выплаты)
+
+Поля продукта: `annual_rate_pct`, `maturity_date`, `income_schedule`, `next_income_date`.
+
+Импорт справочника из CSV/JSON:
+
+```bash
+python manage.py import_finstore_token_terms --file data/samples/finstore_token_terms.example.csv
+```
+
+Синхронизация через файл или переменные окружения `FINSTORE_TERMS_FILE` / `FINSTORE_TERMS_URL`:
+
+```bash
+python manage.py sync_finstore_token_terms --file path/to/terms.csv
+python manage.py sync_finstore_token_terms --recompute-dates-only
+```
+
+После импорта истории Finstore `next_income_date` можно оценить по операциям `Получение дохода`, если задан `income_schedule`.
+
 ## Импорт
 
 - XLS/XLSX: `pandas` + `openpyxl`, сейчас реализован preview skeleton.

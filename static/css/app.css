@@ -429,6 +429,52 @@ button {
     font-size: 0.85rem;
 }
 
+.token-terms-fields {
+    align-items: flex-end;
+}
+
+.form-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.field-error {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--danger);
+    font-size: 0.82rem;
+}
+
+.product-detail-header {
+    align-items: flex-start;
+}
+
+.product-detail-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.product-nav {
+    display: inline-flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    padding-top: 0.15rem;
+}
+
+.nav-arrow {
+    min-width: 2.75rem;
+    padding: 0.65rem 0.9rem;
+    font-size: 1.15rem;
+    line-height: 1;
+}
+
+.nav-arrow.is-disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
 .delta-up {
     color: var(--green);
 }

@@ -32,7 +32,7 @@
                     {% for product in group.products %}
                         <tr>
                             <td>
-                                <a class="product-link" href="{% url 'products:detail' product.pk %}"><strong>{{ product.name }}</strong></a>
+                                <a class="product-link" href="{% url 'products:detail' product.pk %}{% if product_list_query %}?{{ product_list_query }}{% endif %}"><strong>{{ product.name }}</strong></a>
                                 {% if product.symbol %}<div class="muted">{{ product.symbol }}</div>{% endif %}
                             </td>
                             <td>{{ product.institution.name }}</td>

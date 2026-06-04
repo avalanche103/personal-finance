@@ -1,0 +1,3 @@
+external_id,token_id,annual_rate_pct,maturity_date,income_schedule,next_income_date
+SMART_(BYN_868),868,19.00,2031-12-01,monthly,
+YOWHEELS_(USD_864),864,10.00,2028-04-15,monthly,

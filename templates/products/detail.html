@@ -6,13 +6,37 @@
 {% block content %}
 <section class="stack-md">
     <div class="panel stack-md">
-        <div class="panel-header">
-            <div>
-                <p class="eyebrow">Product overview</p>
-                <h2>{{ product.name }}</h2>
-                <p class="muted">{{ product.institution.name }} · {{ product.currency.code }}</p>
+        <div class="panel-header product-detail-header">
+            <div class="product-detail-title">
+                <div class="product-nav" aria-label="Product navigation">
+                    {% if prev_product %}
+                        <a
+                            class="button button-secondary nav-arrow"
+                            href="{% url 'products:detail' prev_product.pk %}{% if nav_query %}?{{ nav_query }}{% endif %}"
+                            title="{{ prev_product.name }}"
+                            aria-label="Previous product: {{ prev_product.name }}"
+                        >←</a>
+                    {% else %}
+                        <span class="button button-secondary nav-arrow is-disabled" aria-hidden="true">←</span>
+                    {% endif %}
+                    {% if next_product %}
+                        <a
+                            class="button button-secondary nav-arrow"
+                            href="{% url 'products:detail' next_product.pk %}{% if nav_query %}?{{ nav_query }}{% endif %}"
+                            title="{{ next_product.name }}"
+                            aria-label="Next product: {{ next_product.name }}"
+                        >→</a>
+                    {% else %}
+                        <span class="button button-secondary nav-arrow is-disabled" aria-hidden="true">→</span>
+                    {% endif %}
+                </div>
+                <div>
+                    <p class="eyebrow">Product overview{% if nav_total %} · {{ nav_index }} / {{ nav_total }}{% endif %}</p>
+                    <h2>{{ product.name }}</h2>
+                    <p class="muted">{{ product.institution.name }} · {{ product.currency.code }}</p>
+                </div>
             </div>
-            <a class="button button-secondary" href="{% url 'products:list' %}">Back to products</a>
+            <a class="button button-secondary" href="{% url 'products:list' %}{% if nav_query %}?{{ nav_query }}{% endif %}">Back to products</a>
         </div>
 
         <form class="filter-bar" method="get">
@@ -112,34 +136,44 @@
 
         <section class="panel stack-md">
             <div>
-                <p class="eyebrow">Extra data</p>
-                <h2>Metadata and rates</h2>
+                <p class="eyebrow">Issue terms</p>
+                <h2>Token terms</h2>
+                <p class="muted">Rate, maturity, and income schedule for this product.</p>
             </div>
 
-            <div class="meta-list">
-                <div class="meta-item"><strong>Institution website</strong><div class="muted">{{ product.institution.website|default:'-' }}</div></div>
-                <div class="meta-item"><strong>Institution country</strong><div class="muted">{{ product.institution.country }}</div></div>
-                <div class="meta-item"><strong>Latest BYN rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.rate_byn|stringformat:'.6f' }} on {{ latest_rate.rate_date|date:'Y-m-d' }}{% else %}No rate history{% endif %}</div></div>
-                <div class="meta-item"><strong>USD cross rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.usd_cross_rate|stringformat:'.10f' }}{% else %}-{% endif %}</div></div>
-            </div>
-
-            <div>
-                <strong>Raw metadata</strong>
-                {% if product_metadata %}
-                    <div class="meta-list" style="margin-top: 0.75rem;">
-                        {% for key, value in product_metadata %}
-                            <div class="meta-item">
-                                <strong>{{ key }}</strong>
-                                <div class="muted">{{ value }}</div>
-                            </div>
-                        {% endfor %}
-                    </div>
-                {% else %}
-                    <p class="muted">No metadata stored for this product.</p>
-                {% endif %}
-            </div>
+            {% include 'products/partials/token_terms_form.html' %}
         </section>
     </div>
+
+    <section class="panel stack-md">
+        <div>
+            <p class="eyebrow">Extra data</p>
+            <h2>Metadata and rates</h2>
+        </div>
+
+        <div class="meta-list">
+            <div class="meta-item"><strong>Institution website</strong><div class="muted">{{ product.institution.website|default:'-' }}</div></div>
+            <div class="meta-item"><strong>Institution country</strong><div class="muted">{{ product.institution.country }}</div></div>
+            <div class="meta-item"><strong>Latest BYN rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.rate_byn|stringformat:'.6f' }} on {{ latest_rate.rate_date|date:'Y-m-d' }}{% else %}No rate history{% endif %}</div></div>
+            <div class="meta-item"><strong>USD cross rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.usd_cross_rate|stringformat:'.10f' }}{% else %}-{% endif %}</div></div>
+        </div>
+
+        <div>
+            <strong>Raw metadata</strong>
+            {% if product_metadata %}
+                <div class="meta-list" style="margin-top: 0.75rem;">
+                    {% for key, value in product_metadata %}
+                        <div class="meta-item">
+                            <strong>{{ key }}</strong>
+                            <div class="muted">{{ value }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="muted">No metadata stored for this product.</p>
+            {% endif %}
+        </div>
+    </section>
 
     <section class="panel stack-md">
         <div>

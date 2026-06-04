@@ -223,6 +223,66 @@ class ProductViewsTests(TestCase):
 		self.assertContains(response, 'Closed token')
 		self.assertTrue(response.context['search_includes_closed'])
 
+	def test_product_detail_navigates_between_products(self):
+		product_two = Product.objects.create(
+			institution=self.finstore,
+			name='Second token',
+			symbol='SEC',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('5'),
+			current_value_usd=Decimal('5'),
+		)
+		product_three = Product.objects.create(
+			institution=self.finstore,
+			name='Third token',
+			symbol='THR',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('50'),
+			current_value_usd=Decimal('50'),
+		)
+
+		response = self.client.get(
+			reverse('products:detail', args=[product_two.pk]),
+			{'sort': 'name', 'dir': 'asc'},
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.context['prev_product'], self.product_usd)
+		self.assertEqual(response.context['next_product'], product_three)
+		self.assertContains(response, f'href="/products/{self.product_usd.pk}/?sort=name&amp;dir=asc"')
+		self.assertContains(response, f'href="/products/{product_three.pk}/?sort=name&amp;dir=asc"')
+		self.assertContains(response, 'nav-arrow')
+		self.assertContains(response, 'is-disabled', count=0)
+
+	def test_product_detail_saves_token_terms(self):
+		response = self.client.post(
+			reverse('products:detail', args=[self.product_usd.pk]),
+			{
+				'action': 'save_terms',
+				'annual_rate_pct': '11.5',
+				'maturity_date': '2028-06-01',
+				'income_schedule': Product.IncomeSchedule.QUARTERLY,
+				'next_income_date': '2026-07-01',
+			},
+		)
+
+		self.assertEqual(response.status_code, 302)
+		self.product_usd.refresh_from_db()
+		self.assertEqual(self.product_usd.annual_rate_pct, Decimal('11.5000'))
+		self.assertEqual(str(self.product_usd.maturity_date), '2028-06-01')
+		self.assertEqual(self.product_usd.income_schedule, Product.IncomeSchedule.QUARTERLY)
+		self.assertEqual(str(self.product_usd.next_income_date), '2026-07-01')
+		self.assertIsNotNone(self.product_usd.terms_updated_at)
+
+		follow_up = self.client.get(reverse('products:detail', args=[self.product_usd.pk]))
+		self.assertContains(follow_up, 'Token terms')
+		self.assertContains(follow_up, 'name="annual_rate_pct"')
+		self.assertContains(follow_up, '11.5')
+
 	def test_product_detail_shows_transactions_snapshots_and_rates(self):
 		occurred_at = timezone.now() - timedelta(days=1)
 		Transaction.objects.create(

@@ -15,6 +15,14 @@ class Product(TimeStampedModel):
 		ETF = 'etf', 'ETF'
 		OTHER = 'other', 'Other'
 
+	class IncomeSchedule(models.TextChoices):
+		MONTHLY = 'monthly', 'Monthly'
+		QUARTERLY = 'quarterly', 'Quarterly'
+		SEMI_ANNUAL = 'semi_annual', 'Semi-annual'
+		ANNUAL = 'annual', 'Annual'
+		AT_MATURITY = 'at_maturity', 'At maturity'
+		OTHER = 'other', 'Other'
+
 	institution = models.ForeignKey('institutions.FinancialInstitution', on_delete=models.CASCADE, related_name='products')
 	name = models.CharField(max_length=255)
 	symbol = models.CharField(max_length=32, blank=True)
@@ -27,6 +35,16 @@ class Product(TimeStampedModel):
 	external_id = models.CharField(max_length=128, blank=True)
 	metadata = models.JSONField(default=dict, blank=True)
 	is_active = models.BooleanField(default=True)
+	annual_rate_pct = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+	maturity_date = models.DateField(null=True, blank=True)
+	income_schedule = models.CharField(
+		max_length=16,
+		choices=IncomeSchedule.choices,
+		blank=True,
+		default='',
+	)
+	next_income_date = models.DateField(null=True, blank=True)
+	terms_updated_at = models.DateTimeField(null=True, blank=True)
 
 	class Meta:
 		ordering = ['name']
@@ -44,3 +62,13 @@ class Product(TimeStampedModel):
 	@property
 	def market_value(self):
 		return self.units * self.current_price
+
+	@property
+	def finstore_token_id(self) -> str:
+		if isinstance(self.metadata, dict) and self.metadata.get('token_id'):
+			return str(self.metadata['token_id'])
+		if self.external_id and '_' in self.external_id:
+			suffix = self.external_id.rsplit('_', 1)[-1]
+			if suffix.endswith(')'):
+				return suffix[:-1]
+		return ''
