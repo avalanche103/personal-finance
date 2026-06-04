@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -13,9 +15,11 @@ from apps.products.services.token_terms import TokenTermsRow
 
 CASTLE_CALENDAR_URL = 'https://castle.by/calendar/'
 CASTLE_BASE_URL = 'https://castle.by'
-DEFAULT_USER_AGENT = 'PersonalFinanceDashboard/1.0 (+local sync)'
+DEFAULT_BOND_INDEX_CACHE = Path('data/cache/castle_bond_index.json')
+DEFAULT_USER_AGENT = 'Mozilla/5.0 (compatible; PersonalFinance/1.0; +local sync)'
 REQUEST_DELAY_SECONDS = 1.0
-MAX_FETCH_RETRIES = 4
+MAX_FETCH_RETRIES = 5
+RATE_LIMIT_BACKOFF_SECONDS = (15, 30, 60, 90, 120)
 
 BOND_LINK_PATTERN = re.compile(r'href="(/bond/(\d+)/)"', re.I)
 CALENDAR_BOND_LINK_PATTERN = re.compile(
@@ -64,7 +68,10 @@ def _fetch_html(url: str, *, timeout: int = 60) -> str:
 		except HTTPError as exc:
 			last_error = exc
 			if exc.code == 429 and attempt < MAX_FETCH_RETRIES - 1:
-				time.sleep(2 ** attempt)
+				backoff = RATE_LIMIT_BACKOFF_SECONDS[
+					min(attempt, len(RATE_LIMIT_BACKOFF_SECONDS) - 1)
+				]
+				time.sleep(backoff)
 				continue
 			raise
 		except URLError as exc:
@@ -180,9 +187,33 @@ def parse_bond_page(html: str, *, bond_id: str, source_url: str) -> CastleBondDe
 	)
 
 
-def fetch_calendar_bond_index(*, calendar_url: str = CASTLE_CALENDAR_URL) -> dict[str, str]:
-	"""Map token external_id -> latest bond id from calendar hyperlinks."""
-	html = _fetch_html(calendar_url)
+def load_bond_index_cache(path: Path) -> dict[str, str] | None:
+	if not path.exists():
+		return None
+	payload = json.loads(path.read_text(encoding='utf-8'))
+	if isinstance(payload.get('index'), dict):
+		return {str(k): str(v) for k, v in payload['index'].items()}
+	if isinstance(payload, dict):
+		return {str(k): str(v) for k, v in payload.items()}
+	return None
+
+
+def save_bond_index_cache(path: Path, index: dict[str, str]) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(
+		json.dumps(
+			{
+				'index': index,
+				'fetched_at': datetime.now().isoformat(timespec='seconds'),
+			},
+			ensure_ascii=False,
+			indent=2,
+		),
+		encoding='utf-8',
+	)
+
+
+def _build_calendar_index_from_html(html: str) -> dict[str, str]:
 	index: dict[str, str] = {}
 
 	for bond_id, link_text in CALENDAR_BOND_LINK_PATTERN.findall(html):
@@ -197,6 +228,44 @@ def fetch_calendar_bond_index(*, calendar_url: str = CASTLE_CALENDAR_URL) -> dic
 		for _href, bond_id in BOND_LINK_PATTERN.findall(html):
 			index.setdefault(bond_id, bond_id)
 
+	return index
+
+
+def fetch_calendar_bond_index(
+	*,
+	calendar_url: str = CASTLE_CALENDAR_URL,
+	bond_index_cache: Path | None = None,
+	use_cache_only: bool = False,
+	calendar_html_file: Path | None = None,
+) -> dict[str, str]:
+	"""Map token external_id -> latest bond id from calendar hyperlinks."""
+	cache_path = bond_index_cache or DEFAULT_BOND_INDEX_CACHE
+
+	if calendar_html_file is not None:
+		html = calendar_html_file.read_text(encoding='utf-8', errors='replace')
+		index = _build_calendar_index_from_html(html)
+		if index:
+			save_bond_index_cache(cache_path, index)
+		return index
+
+	if use_cache_only:
+		cached = load_bond_index_cache(cache_path)
+		if cached:
+			return cached
+		raise RuntimeError(f'Bond index cache not found: {cache_path}')
+
+	try:
+		html = _fetch_html(calendar_url)
+	except HTTPError as exc:
+		if exc.code == 429:
+			cached = load_bond_index_cache(cache_path)
+			if cached:
+				return cached
+		raise
+
+	index = _build_calendar_index_from_html(html)
+	if index:
+		save_bond_index_cache(cache_path, index)
 	return index
 
 
@@ -238,6 +307,8 @@ def fetch_castle_token_terms(
 	target_external_ids: set[str] | None = None,
 	limit: int | None = None,
 	request_delay: float = REQUEST_DELAY_SECONDS,
+	bond_index_cache: Path | None = None,
+	use_cache_only: bool = False,
 ) -> tuple[list[TokenTermsRow], list[str]]:
 	"""Scrape castle.by: one calendar request, then bond pages for matched tokens only."""
 	platform_filter = (platform or '').strip().lower()
@@ -245,7 +316,11 @@ def fetch_castle_token_terms(
 	by_external_id: dict[str, CastleBondDetails] = {}
 
 	url = (calendar_url or CASTLE_CALENDAR_URL).strip()
-	calendar_index = fetch_calendar_bond_index(calendar_url=url)
+	calendar_index = fetch_calendar_bond_index(
+		calendar_url=url,
+		bond_index_cache=bond_index_cache,
+		use_cache_only=use_cache_only,
+	)
 
 	if target_external_ids:
 		bond_jobs = [

@@ -36,7 +36,15 @@
 
                             <strong>{{ group.label }}</strong>
 
-                            <span class="muted font-mono">{{ group.events|length }}</span>
+                            <span class="calendar-group-summary">
+                                {% if group.total_amount is not None %}
+                                    <span class="font-mono">{{ group.total_amount|floatformat:2 }} {{ group.currency_code }}</span>
+                                    {% if group.total_amount_usd %}
+                                        <span class="muted font-mono">({{ group.total_amount_usd|floatformat:2 }} USD)</span>
+                                    {% endif %}
+                                {% endif %}
+                                <span class="muted font-mono">{{ group.events|length }}</span>
+                            </span>
 
                         </summary>
 
@@ -44,7 +52,7 @@
 
                             {% for event in group.events %}
 
-                                <li class="calendar-event calendar-event--forecast">
+                                <li class="calendar-event calendar-event--forecast{% if event.kind == 'maturity_forecast' %} calendar-event--maturity{% endif %}">
 
                                     <div class="calendar-event-main">
 
@@ -83,7 +91,7 @@
 
 {% else %}
 
-    <p class="empty-state">No upcoming income dates in the next 60 days. Import payment history to enable forecasts.</p>
+    <p class="empty-state">No upcoming income or maturity dates in the next 60 days. Set token terms or import payment history to enable forecasts.</p>
 
 {% endif %}
 

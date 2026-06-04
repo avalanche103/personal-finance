@@ -1116,6 +1116,14 @@ button {
     font-size: 0.8125rem;
 }
 
+.calendar-group-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .calendar-group summary::-webkit-details-marker {
     display: none;
 }
@@ -1138,6 +1146,10 @@ button {
 
 .calendar-event--forecast {
     background: var(--warning-soft);
+}
+
+.calendar-event--maturity {
+    background: var(--accent-soft);
 }
 
 .calendar-event-main {
