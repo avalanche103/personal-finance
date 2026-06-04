@@ -1,0 +1,25 @@
+---
+description: Always commit and push db.sqlite3 with application changes
+alwaysApply: true
+---
+
+# Commit local database
+
+This repo tracks the root SQLite database in git. Always include it when committing and pushing.
+
+## What to commit
+
+- `db.sqlite3` at the project root whenever it changed (migrations, imports, bootstrap, admin edits, tests that touch the DB, etc.)
+- Do not commit other `*.sqlite3` files (they stay ignored)
+
+## Git workflow
+
+When the user asks for a commit (or you commit after implementation):
+
+1. Stage application code **and** `db.sqlite3` if it differs from `HEAD`
+2. Never omit `db.sqlite3` from a push because it is "local data" — here it is the shared dev dataset
+3. `.gitignore` already allows only `db.sqlite3` via `!db.sqlite3` under `*.sqlite3`
+
+## If only the database changed
+
+A commit with only `db.sqlite3` is valid when data was updated without code changes (imports, manual fixes, `bootstrap_local_data`).
