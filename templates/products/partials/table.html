@@ -26,7 +26,7 @@
                             {% include 'products/partials/sortable_th.html' with field='value_byn' label='Value BYN' next_dir=sort_next_dirs.value_byn align='right' %}
                         {% endif %}
                         {% include 'products/partials/sortable_th.html' with field='value_usd' label='Value USD' next_dir=sort_next_dirs.value_usd align='right' %}
-                        <th class="text-right">Next income</th>
+                        {% include 'products/partials/sortable_th.html' with field='maturity_date' label='Maturity' next_dir=sort_next_dirs.maturity_date align='right' %}
                     </tr>
                 </thead>
                 <tbody>
@@ -45,8 +45,8 @@
                             {% endif %}
                             <td class="text-right">{{ product.current_value_usd|floatformat:2 }}</td>
                             <td class="text-right font-mono">
-                                {% if product.next_income_date %}
-                                    {{ product.next_income_date|date:'Y-m-d' }}
+                                {% if product.maturity_date %}
+                                    {{ product.maturity_date|date:'Y-m-d' }}
                                 {% else %}
                                     —
                                 {% endif %}

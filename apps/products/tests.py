@@ -134,6 +134,41 @@ class ProductViewsTests(TestCase):
 
 		self.assertEqual(names, ['Bond USD', 'Large bond', 'Small bond'])
 
+	def test_product_list_can_sort_by_maturity_date(self):
+		from datetime import date
+
+		early_bond = Product.objects.create(
+			institution=self.finstore,
+			name='Early bond',
+			product_type=Product.ProductType.BOND,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('100'),
+			current_value_usd=Decimal('100'),
+			maturity_date=date(2026, 1, 15),
+		)
+		self.product_usd.maturity_date = date(2028, 6, 1)
+		self.product_usd.save(update_fields=['maturity_date', 'updated_at'])
+
+		response = self.client.get(
+			reverse('products:list'),
+			{'sort': 'maturity_date', 'dir': 'asc'},
+		)
+		self.assertEqual(response.status_code, 200)
+		group = next(item for item in response.context['product_groups'] if item['label'] == 'Finstore_USD')
+		names = [product.name for product in group['products']]
+		self.assertEqual(names[0], early_bond.name)
+		self.assertEqual(names[1], self.product_usd.name)
+
+		response_desc = self.client.get(
+			reverse('products:list'),
+			{'sort': 'maturity_date', 'dir': 'desc'},
+		)
+		group_desc = next(item for item in response_desc.context['product_groups'] if item['label'] == 'Finstore_USD')
+		names_desc = [product.name for product in group_desc['products']]
+		self.assertEqual(names_desc[0], self.product_usd.name)
+		self.assertEqual(names_desc[1], early_bond.name)
+
 	def test_product_list_can_sort_by_name(self):
 		Product.objects.create(
 			institution=self.finstore,

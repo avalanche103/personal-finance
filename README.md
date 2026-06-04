@@ -98,6 +98,16 @@ python manage.py sync_finstore_token_terms --file path/to/terms.csv
 python manage.py sync_finstore_token_terms --recompute-dates-only
 ```
 
+Синхронизация ставок и дат погашения с [castle.by/calendar](https://castle.by/calendar/) (страницы `/bond/<id>/`):
+
+```bash
+python manage.py sync_castle_token_terms --dry-run
+python manage.py sync_castle_token_terms --platform finstore
+python manage.py sync_castle_token_terms --delay 1.5
+```
+
+По умолчанию запрашиваются только страницы `/bond/<id>/` для токенов, которые уже есть в базе (один запрос к календарю + N страниц выпусков).
+
 После импорта истории Finstore `next_income_date` можно оценить по операциям `Получение дохода`, если задан `income_schedule`.
 
 ## Импорт

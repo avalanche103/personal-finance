@@ -20,7 +20,7 @@ from apps.products.models import Product
 from apps.products.services.token_terms import estimate_next_income_date, income_payment_dates
 
 
-PRODUCT_SORT_FIELDS = ('name', 'institution', 'type', 'currency', 'units', 'value_usd', 'value_byn')
+PRODUCT_SORT_FIELDS = ('name', 'institution', 'type', 'currency', 'units', 'value_usd', 'value_byn', 'maturity_date')
 PRODUCT_NUMERIC_SORT_FIELDS = {'units', 'value_usd', 'value_byn'}
 
 

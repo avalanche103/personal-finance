@@ -195,6 +195,18 @@ PRODUCT_GROUP_SORT_FIELDS = {
 
 
 def sort_group_products(products, sort_field='value_usd', sort_dir='desc'):
+    if sort_field == 'maturity_date':
+        with_dates = sorted(
+            [product for product in products if product.maturity_date],
+            key=lambda product: product.maturity_date,
+            reverse=(sort_dir == 'desc'),
+        )
+        without_dates = sorted(
+            [product for product in products if not product.maturity_date],
+            key=lambda product: product.name.casefold(),
+        )
+        return with_dates + without_dates
+
     key_fn = PRODUCT_GROUP_SORT_FIELDS.get(sort_field, PRODUCT_GROUP_SORT_FIELDS['value_usd'])
     return sorted(products, key=key_fn, reverse=(sort_dir == 'desc'))
 
