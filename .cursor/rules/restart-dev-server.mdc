@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Restart dev server after tasks
 
-After finishing an implementation, fix, or refactor task in this repo, restart the local Django development server so changes are picked up reliably.
+After finishing an implementation, fix, or refactor task in this repo, ensure the Django dev server picks up changes.
 
 ## When to restart
 
@@ -18,29 +18,22 @@ Restart when the task changed any of:
 
 Skip restart for read-only tasks (exploration, reviews, questions with no code changes).
 
-## How to restart on Windows
+## External terminal (default for this project)
 
-1. Stop any process listening on port `8000`.
-2. Start the server again from the project root.
+The user runs `manage.py runserver` in their own terminal. **Do not** stop processes on port `8000` and **do not** start a background server from the agent.
 
-Use PowerShell:
+Instead, at the end of a task that needs a reload, tell the user to restart the server in that terminal (Ctrl+C, then run again):
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 cd "e:\laragon\www\personal-finance"
-python manage.py runserver
+venv\Scripts\python.exe manage.py runserver
 ```
 
-Prefer project venv Python when present:
-
-- `venv\Scripts\python.exe manage.py runserver`
-- `.venv\Scripts\python.exe manage.py runserver`
-
-Run the server in the background and verify it responds at `http://127.0.0.1:8000/`.
+Use `.venv\Scripts\python.exe` if that is the active venv.
 
 ## Completion checklist
 
 Before ending the response:
 
-1. Restart was performed (or skipped with a brief reason).
-2. Mention the server URL if it was restarted.
+1. Note that a restart may be needed in the user's terminal (or that it was skipped with a brief reason).
+2. Do not kill or replace the user's running dev server process.

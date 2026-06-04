@@ -23,7 +23,9 @@
                 </div>
                 <a href="{% url 'dashboard:portfolio_report' %}">Full report</a>
             </div>
-            {% include 'dashboard/partials/portfolio_chart.html' %}
+            <div id="portfolio-chart-panel">
+                {% include 'dashboard/partials/portfolio_chart.html' %}
+            </div>
         </article>
 
         <article class="panel col-4">
@@ -117,7 +119,7 @@
                             <th>Account</th>
                             <th>Institution</th>
                             <th>CCY</th>
-                            <th class="text-right">USD</th>
+                            <th class="text-right">Balance</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -126,7 +128,14 @@
                                 <td>{{ account.name }}</td>
                                 <td>{{ account.institution.name }}</td>
                                 <td class="font-mono">{{ account.currency.code }}</td>
-                                <td class="text-right font-mono">{{ account.current_balance_usd|floatformat:2 }}</td>
+                                <td class="text-right font-mono">
+                                    {% if account.currency.code == 'USD' %}
+                                        <div>{{ account.current_balance|floatformat:2 }} USD</div>
+                                    {% else %}
+                                        <div>{{ account.current_balance|floatformat:2 }} {{ account.currency.code }}</div>
+                                        <div class="muted">${{ account.current_balance_usd|floatformat:2 }}</div>
+                                    {% endif %}
+                                </td>
                             </tr>
                         {% empty %}
                             <tr>

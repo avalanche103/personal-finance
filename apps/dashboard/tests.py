@@ -8,6 +8,7 @@ from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
+from apps.dashboard.views import _portfolio_chart_payload, _portfolio_chart_points
 from apps.products.models import Product
 
 
@@ -24,6 +25,56 @@ class DashboardSmokeTests(TestCase):
 			response = self.client.get(url)
 			self.assertEqual(response.status_code, 200, url)
 
+	def test_dashboard_recent_operations_show_native_and_usd_for_non_usd(self):
+		byn = Currency.objects.get(code='BYN')
+		account = Account.objects.get(name='Finstore BYN Account')
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.INCOME,
+			currency=byn,
+			amount=Decimal('14.00'),
+			amount_usd=Decimal('5.00'),
+			occurred_at=timezone.now(),
+			description='Test BYN income',
+		)
+
+		response = self.client.get('/')
+		self.assertContains(response, 'Test BYN income')
+		self.assertContains(response, 'BYN</div>')
+		self.assertContains(response, '$5,00')
+
+	def test_dashboard_accounts_show_native_and_usd_for_non_usd(self):
+		byn_account = Account.objects.get(name='Finstore BYN Account')
+		byn_account.current_balance = Decimal('14.00')
+		byn_account.current_balance_usd = Decimal('5.00')
+		byn_account.save(update_fields=['current_balance', 'current_balance_usd', 'updated_at'])
+
+		response = self.client.get('/')
+		self.assertContains(response, 'BYN</div>')
+		self.assertContains(response, '$5,00')
+
+	def test_portfolio_chart_points_respect_range(self):
+		as_of = date(2026, 6, 4)
+		self.assertEqual(len(_portfolio_chart_points(as_of, 'week')), 7)
+		self.assertEqual(len(_portfolio_chart_points(as_of, 'month')), 30)
+		self.assertGreaterEqual(len(_portfolio_chart_points(as_of, 'year')), 52)
+
+	def test_portfolio_chart_payload_includes_change_series(self):
+		points = [
+			{'date': date(2026, 6, 1), 'value': 1000.0},
+			{'date': date(2026, 6, 4), 'value': 1012.5},
+		]
+		payload = _portfolio_chart_payload(points, 'week', 'change')
+		self.assertEqual(payload['change_pct'][0], 0.0)
+		self.assertEqual(payload['change_pct'][-1], 1.25)
+		self.assertEqual(payload['period_change_usd'], 12.5)
+
+	def test_dashboard_portfolio_chart_partial_supports_range_and_mode(self):
+		response = self.client.get('/partials/portfolio-chart/?range=week&mode=value')
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'chart-range-btn is-active')
+		self.assertContains(response, 'Total USD')
+
 	def test_dashboard_contains_bootstrap_cards(self):
 		response = self.client.get('/')
 		self.assertContains(response, 'NBRB rates')
@@ -35,6 +86,10 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Recent operations')
 		self.assertContains(response, 'Operations calendar')
 		self.assertContains(response, 'portfolio-chart-data')
+		self.assertContains(response, 'chart-range-btn')
+		self.assertContains(response, 'Total USD')
+		self.assertContains(response, 'Change %')
+		self.assertContains(response, 'portfolio-chart-panel')
 		self.assertContains(response, 'plotly')
 		self.assertContains(response, 'Last day of previous month')
 		self.assertIn('product_groups', response.context)

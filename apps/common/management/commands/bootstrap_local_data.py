@@ -54,7 +54,7 @@ class Command(BaseCommand):
 			slug='finstore',
 			defaults={
 				'name': 'Finstore',
-				'institution_type': FinancialInstitution.InstitutionType.BANK,
+				'institution_type': FinancialInstitution.InstitutionType.BROKER,
 				'country': 'BY',
 				'base_currency': byn,
 				'metadata': {'bootstrap': True},
@@ -82,22 +82,26 @@ class Command(BaseCommand):
 			},
 		)
 
-		for account_name, currency, current_balance, current_balance_usd in [
-			('Finstore BYN Account', byn, Decimal('0.00'), Decimal('0.00')),
-			('Finstore USD Account', usd, Decimal('0.00'), Decimal('0.00')),
-			('Finstore EUR Account', eur, Decimal('0.00'), Decimal('0.00')),
-			('Finstore RUB Account', rub, Decimal('0.00'), Decimal('0.00')),
+		for account_name, currency in [
+			('Finstore BYN Account', byn),
+			('Finstore USD Account', usd),
+			('Finstore EUR Account', eur),
+			('Finstore RUB Account', rub),
 		]:
-			Account.objects.get_or_create(
+			account, created = Account.objects.get_or_create(
 				institution=finstore,
 				name=account_name,
 				defaults={
-					'account_type': Account.AccountType.BANK,
+					'account_type': Account.AccountType.BROKERAGE,
 					'currency': currency,
-					'current_balance': current_balance,
-					'current_balance_usd': current_balance_usd,
+					'current_balance': Decimal('0.00'),
+					'current_balance_usd': Decimal('0.00'),
 					'metadata': {'bootstrap': True},
 				},
 			)
+			if not created:
+				account.account_type = Account.AccountType.BROKERAGE
+				account.currency = currency
+				account.save(update_fields=['account_type', 'currency', 'updated_at'])
 
 		self.stdout.write(self.style.SUCCESS('Local bootstrap data created or updated.'))

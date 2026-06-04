@@ -1,7 +1,47 @@
+<div class="chart-controls">
+    <div class="chart-range-bar" role="group" aria-label="Portfolio chart range">
+        {% for value, label in chart_range_options %}
+            <button
+                type="button"
+                class="chart-range-btn{% if chart_range == value %} is-active{% endif %}"
+                hx-get="{% url 'dashboard:portfolio_chart' %}?range={{ value }}&mode={{ chart_mode }}"
+                hx-target="#portfolio-chart-panel"
+                hx-swap="innerHTML"
+                {% if chart_range == value %}aria-pressed="true"{% else %}aria-pressed="false"{% endif %}
+            >
+                {{ label }}
+            </button>
+        {% endfor %}
+    </div>
+    <div class="chart-range-bar chart-mode-bar" role="group" aria-label="Portfolio chart scale">
+        {% for value, label in chart_mode_options %}
+            <button
+                type="button"
+                class="chart-range-btn{% if chart_mode == value %} is-active{% endif %}"
+                hx-get="{% url 'dashboard:portfolio_chart' %}?range={{ chart_range }}&mode={{ value }}"
+                hx-target="#portfolio-chart-panel"
+                hx-swap="innerHTML"
+                {% if chart_mode == value %}aria-pressed="true"{% else %}aria-pressed="false"{% endif %}
+            >
+                {{ label }}
+            </button>
+        {% endfor %}
+    </div>
+</div>
+
 {% if portfolio_chart_json.values %}
     <div id="portfolio-chart" class="chart-card plotly-chart" aria-label="Portfolio value trend"></div>
     {{ portfolio_chart_json|json_script:"portfolio-chart-data" }}
-    <p class="muted">Weekly portfolio USD · {{ portfolio_chart_json.values|length }} points · hover for values</p>
+    <p class="muted">
+        {% if chart_mode == 'change' %}
+            Change from start of period · {{ chart_granularity_label }} · {{ portfolio_chart_json.values|length }} points
+            · period
+            {% if portfolio_chart_json.period_change_pct > 0 %}+{% endif %}{{ portfolio_chart_json.period_change_pct|floatformat:2 }}%
+            ({% if portfolio_chart_json.period_change_usd > 0 %}+{% endif %}${{ portfolio_chart_json.period_change_usd|floatformat:2 }})
+        {% else %}
+            {{ chart_granularity_label|capfirst }} portfolio USD · {{ portfolio_chart_json.values|length }} points · zoomed axis
+        {% endif %}
+    </p>
 {% else %}
     <p class="empty-state">Not enough history to render a chart yet.</p>
 {% endif %}

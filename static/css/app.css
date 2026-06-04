@@ -626,6 +626,47 @@ button {
     gap: 0.75rem;
 }
 
+.chart-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.chart-range-bar {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.2rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+}
+
+.chart-range-btn {
+    border: 0;
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chart-range-btn:hover {
+    color: var(--text);
+    background: var(--surface);
+}
+
+.chart-range-btn.is-active {
+    background: var(--accent);
+    color: #fff;
+}
+
 .filter-field {
     min-width: 180px;
 }

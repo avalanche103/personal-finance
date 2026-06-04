@@ -16,19 +16,93 @@ from apps.products.models import Product
 from apps.products.operations_calendar import build_operations_calendar
 
 
-def _portfolio_chart_points(as_of_date: date, weeks: int = 26) -> list[dict]:
+PORTFOLIO_CHART_RANGES = {
+    'week': {'label': 'Week', 'span_days': 6, 'step_days': 1, 'granularity': 'daily'},
+    'month': {'label': 'Month', 'span_days': 29, 'step_days': 1, 'granularity': 'daily'},
+    'year': {'label': 'Year', 'span_days': 364, 'step_days': 7, 'granularity': 'weekly'},
+}
+DEFAULT_PORTFOLIO_CHART_RANGE = 'month'
+
+PORTFOLIO_CHART_MODES = {
+    'value': {'label': 'Total USD'},
+    'change': {'label': 'Change %'},
+}
+DEFAULT_PORTFOLIO_CHART_MODE = 'value'
+
+
+def _resolve_portfolio_chart_range(range_key: str | None) -> str:
+    if range_key in PORTFOLIO_CHART_RANGES:
+        return range_key
+    return DEFAULT_PORTFOLIO_CHART_RANGE
+
+
+def _resolve_portfolio_chart_mode(mode_key: str | None) -> str:
+    if mode_key in PORTFOLIO_CHART_MODES:
+        return mode_key
+    return DEFAULT_PORTFOLIO_CHART_MODE
+
+
+def _portfolio_chart_points(as_of_date: date, range_key: str = DEFAULT_PORTFOLIO_CHART_RANGE) -> list[dict]:
+    config = PORTFOLIO_CHART_RANGES[_resolve_portfolio_chart_range(range_key)]
+    span_days = config['span_days']
+    step_days = config['step_days']
+    point_dates = [as_of_date - timedelta(days=offset) for offset in range(span_days, -1, -step_days)]
+    if point_dates[-1] != as_of_date:
+        point_dates.append(as_of_date)
+
     points = []
-    for offset in range(weeks - 1, -1, -1):
-        point_date = as_of_date - timedelta(days=offset * 7)
+    for point_date in point_dates:
         snapshot = _historical_portfolio_context(point_date)
         points.append({'date': point_date, 'value': float(snapshot['portfolio_usd'])})
     return points
 
 
-def _portfolio_chart_payload(points: list[dict]) -> dict:
+def _portfolio_chart_payload(points: list[dict], range_key: str, mode_key: str) -> dict:
+    config = PORTFOLIO_CHART_RANGES[_resolve_portfolio_chart_range(range_key)]
+    values = [point['value'] for point in points]
+    baseline = values[0] if values else 0.0
+    change_pct = []
+    change_usd = []
+    for value in values:
+        if baseline:
+            change_pct.append(round((value / baseline - 1) * 100, 4))
+            change_usd.append(round(value - baseline, 2))
+        else:
+            change_pct.append(0.0)
+            change_usd.append(0.0)
+
     return {
+        'range': range_key,
+        'mode': _resolve_portfolio_chart_mode(mode_key),
+        'granularity': config['granularity'],
         'dates': [point['date'].isoformat() for point in points],
-        'values': [point['value'] for point in points],
+        'values': values,
+        'change_pct': change_pct,
+        'change_usd': change_usd,
+        'baseline_usd': baseline,
+        'period_change_pct': change_pct[-1] if change_pct else 0.0,
+        'period_change_usd': change_usd[-1] if change_usd else 0.0,
+    }
+
+
+def _portfolio_chart_context(
+    range_key: str | None = None,
+    mode_key: str | None = None,
+    as_of_date: date | None = None,
+) -> dict:
+    as_of_date = as_of_date or timezone.localdate()
+    chart_range = _resolve_portfolio_chart_range(range_key)
+    chart_mode = _resolve_portfolio_chart_mode(mode_key)
+    chart_points = _portfolio_chart_points(as_of_date, chart_range)
+    config = PORTFOLIO_CHART_RANGES[chart_range]
+    return {
+        'chart_range': chart_range,
+        'chart_mode': chart_mode,
+        'chart_range_options': [(key, value['label']) for key, value in PORTFOLIO_CHART_RANGES.items()],
+        'chart_mode_options': [(key, value['label']) for key, value in PORTFOLIO_CHART_MODES.items()],
+        'chart_granularity_label': config['granularity'],
+        'portfolio_chart_points': chart_points,
+        'portfolio_chart_json': _portfolio_chart_payload(chart_points, chart_range, chart_mode),
     }
 
 
@@ -202,11 +276,9 @@ def dashboard_home(request):
     products = list(Product.objects.select_related('institution', 'currency').filter(is_active=True).order_by('institution__name', 'currency__code', 'name'))
     product_transaction_map = build_product_transaction_map([product.id for product in products])
     metrics = _dashboard_metrics()
-    chart_points = _portfolio_chart_points(as_of_date)
     context = {
         'metrics': metrics,
-        'portfolio_chart_points': chart_points,
-        'portfolio_chart_json': _portfolio_chart_payload(chart_points),
+        **_portfolio_chart_context(request.GET.get('range'), request.GET.get('mode'), as_of_date),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
         'accounts': Account.objects.select_related('institution', 'currency').order_by('name')[:8],
         'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=as_of_date),
@@ -220,6 +292,14 @@ def dashboard_home(request):
         },
     }
     return render(request, 'dashboard/index.html', context)
+
+
+def dashboard_portfolio_chart(request):
+    return render(
+        request,
+        'dashboard/partials/portfolio_chart.html',
+        _portfolio_chart_context(request.GET.get('range'), request.GET.get('mode')),
+    )
 
 
 def dashboard_summary(request):

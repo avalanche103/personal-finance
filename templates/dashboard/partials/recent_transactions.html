@@ -6,7 +6,7 @@
                 <th>Account</th>
                 <th>Type</th>
                 <th>Description</th>
-                <th class="text-right">Amount USD</th>
+                <th class="text-right">Amount</th>
             </tr>
         </thead>
         <tbody>
@@ -17,7 +17,12 @@
                     <td>{{ tx.get_transaction_type_display }}</td>
                     <td>{{ tx.description|default:'—'|truncatechars:48 }}</td>
                     <td class="text-right font-mono {% if tx.amount_usd < 0 %}delta-down{% elif tx.amount_usd > 0 %}delta-up{% endif %}">
-                        {{ tx.amount_usd|floatformat:2 }}
+                        {% if tx.currency.code == 'USD' %}
+                            <div>{{ tx.amount|floatformat:2 }} USD</div>
+                        {% else %}
+                            <div>{{ tx.amount|floatformat:2 }} {{ tx.currency.code }}</div>
+                            <div class="muted">${{ tx.amount_usd|floatformat:2 }}</div>
+                        {% endif %}
                     </td>
                 </tr>
             {% empty %}
