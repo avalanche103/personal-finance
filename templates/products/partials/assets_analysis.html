@@ -1,0 +1,69 @@
+<section class="assets-analysis stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Portfolio</p>
+            <h2>Assets Analysis</h2>
+        </div>
+        <span class="muted font-mono">{{ portfolio_allocation.total_usd|floatformat:2 }} USD</span>
+    </div>
+
+    {% if portfolio_allocation.total_usd %}
+        <div class="allocation-grid">
+            <div class="allocation-card">
+                <h3>Institutions</h3>
+                <div class="allocation-rows">
+                    {% for row in portfolio_allocation.by_institution %}
+                        <div class="allocation-row">
+                            <div class="progress-header">
+                                <span>{{ row.label }}</span>
+                                <span class="font-mono muted">{{ row.share_pct|floatformat:1 }}% · {{ row.value_usd|floatformat:0 }} USD</span>
+                            </div>
+                            <div class="progress-track" aria-hidden="true">
+                                <div class="progress-bar" style="width: {{ row.share_pct }}%;"></div>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="allocation-card">
+                <h3>Product groups</h3>
+                <div class="allocation-rows">
+                    {% for row in portfolio_allocation.by_group %}
+                        <div class="allocation-row">
+                            <div class="progress-header">
+                                <span>{{ row.label }}</span>
+                                <span class="font-mono muted">{{ row.share_pct|floatformat:1 }}% · {{ row.value_usd|floatformat:0 }} USD</span>
+                            </div>
+                            <div class="progress-track" aria-hidden="true">
+                                <div class="progress-bar" style="width: {{ row.share_pct }}%;"></div>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="allocation-card">
+                <h3>Issuers</h3>
+                <p class="muted allocation-note">Token issuers are derived from the token name before the issue number.</p>
+                <div class="allocation-rows">
+                    {% for row in portfolio_allocation.by_issuer %}
+                        <div class="allocation-row">
+                            <div class="progress-header">
+                                <span>{{ row.label }}</span>
+                                <span class="font-mono muted">{{ row.share_pct|floatformat:1 }}% · {{ row.value_usd|floatformat:0 }} USD</span>
+                            </div>
+                            <div class="progress-track" aria-hidden="true">
+                                <div class="progress-bar" style="width: {{ row.share_pct }}%;"></div>
+                            </div>
+                        </div>
+                    {% empty %}
+                        <p class="empty-state">No tokens in the current list.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <p class="empty-state">No portfolio value to analyze.</p>
+    {% endif %}
+</section>

@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import re
 from collections import OrderedDict, defaultdict
 from datetime import date
 from decimal import Decimal
 from math import isfinite
 
 from apps.accounts.models import Transaction
+from apps.products.models import Product
+
+TOKEN_ISSUER_PATTERN = re.compile(
+    r'^(?P<issuer>.+?)_\((?P<currency>[A-Z]{3})_(?P<issue>\d+)\)$',
+    re.I,
+)
+TOKEN_ISSUER_ALT_PATTERN = re.compile(
+    r'^([A-Z][A-Z0-9_]+?)(?:USD|BYN|EUR|RUB)\.\d{4}\.\d+',
+    re.I,
+)
 
 
 def product_group_label(institution_name: str, currency_code: str) -> str:
@@ -278,3 +289,60 @@ def build_product_groups(
         group['products'] = sort_group_products(group['products'], sort_field=sort_field, sort_dir=sort_dir)
 
     return list(grouped.values())
+
+
+def extract_token_issuer(product) -> str:
+    metadata = product.metadata if isinstance(product.metadata, dict) else {}
+    issuer = str(metadata.get('issuer', '') or '').strip()
+    if issuer:
+        return issuer
+
+    for source in (product.external_id, product.name, product.symbol):
+        candidate = str(source or '').strip()
+        if not candidate:
+            continue
+        match = TOKEN_ISSUER_PATTERN.match(candidate)
+        if match:
+            return match.group('issuer')
+        alt_match = TOKEN_ISSUER_ALT_PATTERN.match(candidate)
+        if alt_match:
+            return alt_match.group(1).rstrip('._')
+        return candidate
+
+    return 'Unknown'
+
+
+def _allocation_rows(bucket: dict[str, Decimal], total_usd: Decimal) -> list[dict]:
+    rows = []
+    for label, value_usd in sorted(bucket.items(), key=lambda item: item[1], reverse=True):
+        share_pct = value_usd / total_usd * Decimal('100') if total_usd else Decimal('0')
+        rows.append(
+            {
+                'label': label,
+                'value_usd': value_usd,
+                'share_pct': share_pct,
+            }
+        )
+    return rows
+
+
+def build_portfolio_allocation(products) -> dict:
+    by_institution: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
+    by_group: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
+    by_issuer: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
+    total_usd = Decimal('0')
+
+    for product in products:
+        value_usd = product.current_value_usd or Decimal('0')
+        total_usd += value_usd
+        by_institution[product.institution.name] += value_usd
+        by_group[product_group_label(*product_group_key(product))] += value_usd
+        if product.product_type == Product.ProductType.TOKEN:
+            by_issuer[extract_token_issuer(product)] += value_usd
+
+    return {
+        'total_usd': total_usd,
+        'by_institution': _allocation_rows(by_institution, total_usd),
+        'by_group': _allocation_rows(by_group, total_usd),
+        'by_issuer': _allocation_rows(by_issuer, total_usd),
+    }

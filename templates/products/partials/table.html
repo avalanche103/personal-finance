@@ -2,7 +2,7 @@
 <input type="hidden" name="dir" id="product-sort-dir" value="{{ sort_dir }}" hx-swap-oob="true">
 
 {% for group in product_groups %}
-    <details class="product-group" {% if forloop.first %}open{% endif %}>
+    <details class="product-group">
         <summary>
             <div>
                 <strong>{{ group.label }}</strong>
@@ -60,3 +60,5 @@
 {% empty %}
     <div class="empty-state">No products found.</div>
 {% endfor %}
+
+{% include 'products/partials/assets_analysis.html' %}

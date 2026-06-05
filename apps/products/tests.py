@@ -8,6 +8,7 @@ from django.utils import timezone
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.models import Currency, ExchangeRateHistory
 from apps.institutions.models import FinancialInstitution
+from apps.products.analytics import build_portfolio_allocation, extract_token_issuer
 from apps.products.models import Product
 
 
@@ -257,6 +258,61 @@ class ProductViewsTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'Closed token')
 		self.assertTrue(response.context['search_includes_closed'])
+
+	def test_extract_token_issuer_parses_finstore_token_name(self):
+		product = Product(external_id='SMART_(BYN_868)', name='SMART_(BYN_868)', metadata={})
+		self.assertEqual(extract_token_issuer(product), 'SMART')
+
+	def test_extract_token_issuer_uses_metadata_when_present(self):
+		product = Product(external_id='SMART_(BYN_868)', metadata={'issuer': 'Custom issuer'})
+		self.assertEqual(extract_token_issuer(product), 'Custom issuer')
+
+	def test_build_portfolio_allocation_groups_by_institution_group_and_issuer(self):
+		token_a = Product.objects.create(
+			institution=self.finstore,
+			name='POLESIE_(USD_676)',
+			external_id='POLESIE_(USD_676)',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('300'),
+			current_value_usd=Decimal('300'),
+		)
+		token_b = Product.objects.create(
+			institution=self.finstore,
+			name='POLESIE_(USD_626)',
+			external_id='POLESIE_(USD_626)',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('200'),
+			current_value_usd=Decimal('200'),
+		)
+
+		allocation = build_portfolio_allocation(
+			[self.product_usd, self.product_byn, self.other_product, token_a, token_b]
+		)
+
+		institutions = {row['label']: row for row in allocation['by_institution']}
+		self.assertEqual(institutions['Finstore']['value_usd'], Decimal('1810'))
+		self.assertEqual(institutions['Alfa']['value_usd'], Decimal('200'))
+
+		groups = {row['label']: row for row in allocation['by_group']}
+		self.assertEqual(groups['Finstore_USD']['value_usd'], Decimal('1500'))
+		self.assertEqual(groups['Finstore_BYN']['value_usd'], Decimal('310'))
+
+		issuers = {row['label']: row for row in allocation['by_issuer']}
+		self.assertEqual(issuers['POLESIE']['value_usd'], Decimal('500'))
+
+	def test_product_list_shows_assets_analysis(self):
+		response = self.client.get(reverse('products:list'))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Assets Analysis')
+		self.assertContains(response, 'Institutions')
+		self.assertContains(response, 'Product groups')
+		self.assertContains(response, 'Issuers')
+		self.assertIn('portfolio_allocation', response.context)
 
 	def test_product_detail_navigates_between_products(self):
 		product_two = Product.objects.create(

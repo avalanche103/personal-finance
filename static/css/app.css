@@ -798,6 +798,51 @@ button {
     font-size: 0.75rem;
 }
 
+/* Portfolio allocation */
+
+.assets-analysis {
+    margin-top: var(--grid-gap);
+    padding-top: var(--grid-gap);
+    border-top: 1px solid var(--border);
+}
+
+.allocation-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--grid-gap);
+}
+
+.allocation-card {
+    padding: 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+}
+
+.allocation-card h3 {
+    margin: 0 0 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.allocation-note {
+    margin: -0.35rem 0 0.75rem;
+    font-size: 0.75rem;
+}
+
+.allocation-rows {
+    display: grid;
+    gap: 0.65rem;
+}
+
+.allocation-row .progress-header {
+    font-size: 0.75rem;
+}
+
+.allocation-row .progress-header span:first-child {
+    font-weight: 500;
+}
+
 /* Groups (products/accounts) */
 
 .product-group,
@@ -1211,7 +1256,8 @@ button {
     .grid-two,
     .compact-grid,
     .info-grid,
-    .settings-grid {
+    .settings-grid,
+    .allocation-grid {
         grid-template-columns: 1fr;
     }
 }

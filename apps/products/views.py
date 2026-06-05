@@ -10,6 +10,7 @@ from django.views.decorators.http import require_http_methods
 from apps.accounts.models import Transaction
 from apps.common.models import ExchangeRateHistory
 from apps.products.analytics import (
+    build_portfolio_allocation,
     build_product_groups,
     build_product_performance_summary,
     build_product_position_summary,
@@ -131,6 +132,7 @@ def product_list(request):
             sort_field=sort_field,
             sort_dir=sort_dir,
         ),
+        'portfolio_allocation': build_portfolio_allocation(ordered_products),
         'query': query,
         'show_closed': show_closed,
         'search_includes_closed': bool(query and not show_closed),
