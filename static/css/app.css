@@ -806,6 +806,18 @@ button {
     border-top: 1px solid var(--border);
 }
 
+.allocation-header-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
+
+.allocation-filter-field {
+    min-width: 10rem;
+}
+
 .allocation-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

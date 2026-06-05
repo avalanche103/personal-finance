@@ -96,7 +96,7 @@ def _parse_date(value: str) -> date | None:
 	text = re.sub(r'\s+', ' ', (value or '').strip())
 	if not text:
 		return None
-	for fmt in ('%d/%m/%Y', '%d.%m.%Y', '%Y-%m-%d'):
+	for fmt in ('%d.%m.%Y', '%d/%m/%Y', '%Y-%m-%d'):
 		try:
 			return datetime.strptime(text[:10], fmt).date()
 		except ValueError:

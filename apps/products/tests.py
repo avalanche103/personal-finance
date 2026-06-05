@@ -8,7 +8,13 @@ from django.utils import timezone
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.models import Currency, ExchangeRateHistory
 from apps.institutions.models import FinancialInstitution
-from apps.products.analytics import build_portfolio_allocation, extract_token_issuer
+from apps.products.analytics import (
+	allocation_instrument_choices,
+	build_portfolio_allocation,
+	build_product_performance_summary,
+	build_product_position_summary,
+	extract_token_issuer,
+)
 from apps.products.models import Product
 
 
@@ -304,6 +310,96 @@ class ProductViewsTests(TestCase):
 		issuers = {row['label']: row for row in allocation['by_issuer']}
 		self.assertEqual(issuers['POLESIE']['value_usd'], Decimal('500'))
 
+	def test_build_portfolio_allocation_limits_issuers_to_top_ten(self):
+		tokens = [
+			Product.objects.create(
+				institution=self.finstore,
+				name=f'ISSUER{i}_(USD_{i})',
+				external_id=f'ISSUER{i}_(USD_{i})',
+				product_type=Product.ProductType.TOKEN,
+				currency=self.usd,
+				units=Decimal('1'),
+				current_price=Decimal(str(100 - i)),
+				current_value_usd=Decimal(str(100 - i)),
+			)
+			for i in range(12)
+		]
+
+		allocation = build_portfolio_allocation(tokens)
+
+		self.assertEqual(len(allocation['by_issuer']), 10)
+		self.assertEqual(allocation['by_issuer'][0]['label'], 'ISSUER0')
+		self.assertEqual(allocation['by_issuer'][-1]['label'], 'ISSUER9')
+
+	def test_build_portfolio_allocation_filters_by_instrument_type(self):
+		token_a = Product.objects.create(
+			institution=self.finstore,
+			name='POLESIE_(USD_676)',
+			external_id='POLESIE_(USD_676)',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('300'),
+			current_value_usd=Decimal('300'),
+		)
+		token_b = Product.objects.create(
+			institution=self.finstore,
+			name='POLESIE_(USD_626)',
+			external_id='POLESIE_(USD_626)',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('200'),
+			current_value_usd=Decimal('200'),
+		)
+		bond = Product.objects.create(
+			institution=self.finstore,
+			name='Айгенис Оп47',
+			external_id='BCSE-00477-P01',
+			product_type=Product.ProductType.BOND,
+			currency=self.byn,
+			units=Decimal('3'),
+			current_price=Decimal('500'),
+			current_value_usd=Decimal('526.17'),
+			metadata={'issuer': 'Айгенис закрытое акционерное общество'},
+		)
+		products = [self.product_usd, self.product_byn, self.other_product, token_a, token_b, bond]
+
+		bond_allocation = build_portfolio_allocation(products, instrument_type=Product.ProductType.BOND)
+		token_allocation = build_portfolio_allocation(products, instrument_type=Product.ProductType.TOKEN)
+
+		self.assertEqual(bond_allocation['total_usd'], Decimal('1836.17'))
+		self.assertEqual(bond_allocation['product_count'], 3)
+		self.assertEqual(bond_allocation['instrument_type'], 'bond')
+		self.assertEqual(bond_allocation['instrument_label'], 'Bond')
+
+		issuers = {row['label']: row for row in bond_allocation['by_issuer']}
+		self.assertEqual(issuers['Aigenis']['value_usd'], Decimal('526.17'))
+		self.assertAlmostEqual(float(issuers['Aigenis']['share_pct']), 526.17 / 1836.17 * 100, places=1)
+
+		self.assertEqual(token_allocation['total_usd'], Decimal('500'))
+		self.assertEqual(token_allocation['product_count'], 2)
+		token_issuers = {row['label']: row for row in token_allocation['by_issuer']}
+		self.assertEqual(token_issuers['POLESIE']['share_pct'], Decimal('100'))
+
+	def test_build_portfolio_allocation_includes_bond_issuers(self):
+		bond = Product.objects.create(
+			institution=self.finstore,
+			name='Айгенис Оп47',
+			external_id='BCSE-00477-P01',
+			product_type=Product.ProductType.BOND,
+			currency=self.byn,
+			units=Decimal('3'),
+			current_price=Decimal('500'),
+			current_value_usd=Decimal('526.17'),
+			metadata={'issuer': 'Айгенис закрытое акционерное общество'},
+		)
+
+		allocation = build_portfolio_allocation([bond])
+
+		issuers = {row['label']: row for row in allocation['by_issuer']}
+		self.assertEqual(issuers['Aigenis']['value_usd'], Decimal('526.17'))
+
 	def test_product_list_shows_assets_analysis(self):
 		response = self.client.get(reverse('products:list'))
 
@@ -312,7 +408,34 @@ class ProductViewsTests(TestCase):
 		self.assertContains(response, 'Institutions')
 		self.assertContains(response, 'Product groups')
 		self.assertContains(response, 'Issuers')
+		self.assertContains(response, 'allocation-type-filter')
 		self.assertIn('portfolio_allocation', response.context)
+
+	def test_allocation_instrument_choices_lists_only_present_product_types(self):
+		choices = allocation_instrument_choices(
+			[self.product_usd, self.product_byn, self.other_product]
+		)
+
+		self.assertEqual(choices, [
+			(Product.ProductType.BOND, 'Bond'),
+			(Product.ProductType.ETF, 'ETF'),
+		])
+
+	def test_product_list_shows_only_present_allocation_instrument_types(self):
+		response = self.client.get(reverse('products:list'))
+
+		self.assertContains(response, 'value="bond"')
+		self.assertContains(response, 'value="etf"')
+		self.assertNotContains(response, 'value="token"')
+		self.assertNotContains(response, 'value="crypto"')
+
+	def test_product_list_filters_assets_analysis_by_instrument_type(self):
+		response = self.client.get(reverse('products:list'), {'allocation_type': 'bond'})
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.context['allocation_type'], 'bond')
+		self.assertEqual(response.context['portfolio_allocation']['instrument_type'], 'bond')
+		self.assertContains(response, 'within bonds')
 
 	def test_product_detail_navigates_between_products(self):
 		product_two = Product.objects.create(
@@ -454,3 +577,53 @@ class ProductViewsTests(TestCase):
 		self.assertEqual(response.context['position_summary']['avg_entry_price'], Decimal('100'))
 		self.assertEqual(response.context['position_summary']['redeemed_units'], Decimal('2'))
 		self.assertIsNotNone(response.context['performance_summary']['total_return_pct'])
+
+
+class ProductPositionSummaryTests(TestCase):
+	def _sample_transactions_with_fee(self):
+		return [
+			Transaction(
+				transaction_type=Transaction.TransactionType.TRADE,
+				amount=Decimal('-1000'),
+				amount_usd=Decimal('-1000'),
+				quantity=Decimal('10'),
+				occurred_at=timezone.now(),
+			),
+			Transaction(
+				transaction_type=Transaction.TransactionType.FEE,
+				amount=Decimal('-5'),
+				amount_usd=Decimal('-5'),
+				quantity=Decimal('0'),
+				occurred_at=timezone.now(),
+			),
+		]
+
+	def test_bond_purchase_fees_increase_cost_basis_and_reduce_total_return(self):
+		transactions = self._sample_transactions_with_fee()
+		summary = build_product_position_summary(
+			transactions,
+			market_value=Decimal('1100'),
+			market_value_usd=Decimal('1100'),
+			product_type=Product.ProductType.BOND,
+		)
+		performance = build_product_performance_summary(transactions, summary)
+
+		self.assertEqual(summary['purchase_cost'], Decimal('1005'))
+		self.assertEqual(summary['purchase_cost_usd'], Decimal('1005'))
+		self.assertEqual(summary['avg_entry_price'], Decimal('100.5'))
+		self.assertEqual(summary['open_cost_basis_usd'], Decimal('1005'))
+		self.assertEqual(summary['unrealized_pnl_usd'], Decimal('95'))
+		self.assertEqual(performance['total_return_value'], Decimal('95'))
+
+	def test_token_purchase_fees_are_excluded_from_cost_basis(self):
+		transactions = self._sample_transactions_with_fee()
+		summary = build_product_position_summary(
+			transactions,
+			market_value=Decimal('1100'),
+			market_value_usd=Decimal('1100'),
+			product_type=Product.ProductType.TOKEN,
+		)
+
+		self.assertEqual(summary['purchase_cost'], Decimal('1000'))
+		self.assertEqual(summary['purchase_cost_usd'], Decimal('1000'))
+		self.assertEqual(summary['avg_entry_price'], Decimal('100'))

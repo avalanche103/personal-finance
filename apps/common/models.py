@@ -48,4 +48,6 @@ class ExchangeRateHistory(TimeStampedModel):
 		verbose_name_plural = 'Exchange rate history'
 
 	def __str__(self) -> str:
-		return f'{self.currency.code} @ {self.rate_date}'
+		from apps.common.dates import format_display_date
+
+		return f'{self.currency.code} @ {format_display_date(self.rate_date)}'

@@ -11,7 +11,7 @@
             <div>
                 <p class="eyebrow">Job</p>
                 <h2>{{ job.source.name }}</h2>
-                <p class="muted font-mono">{{ job.original_filename|default:'Manual/API job' }} · {{ job.created_at|date:'Y-m-d H:i' }}</p>
+                <p class="muted font-mono">{{ job.original_filename|default:'Manual/API job' }} · {{ job.created_at|display_datetime }}</p>
             </div>
             <div class="form-actions">
                 <a class="button button-secondary" href="{% url 'imports:history' %}">History</a>

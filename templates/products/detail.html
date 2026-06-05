@@ -107,7 +107,11 @@
 
             <div class="meta-list">
                 <div class="meta-item"><strong>Institution</strong><div class="muted">{{ product.institution.name }}</div></div>
-                <div class="meta-item"><strong>Type</strong><div class="muted">{{ product.get_product_type_display }}</div></div>
+                <div class="meta-item"><strong>Type</strong><div class="muted">{{ product.get_product_type_display }}{% if product.bond_kind_display %} · {{ product.bond_kind_display }}{% endif %}</div></div>
+                <div class="meta-item"><strong>Coupon account</strong><div class="muted">{% if product.income_account %}{{ product.income_account.institution.name }} · {{ product.income_account.name }}{% else %}-{% endif %}</div></div>
+                {% if product.metadata.face_value_usd %}
+                    <div class="meta-item"><strong>Face value (USD)</strong><div class="muted font-mono">{{ product.metadata.face_value_usd }} USD{% if product.metadata.face_value_byn %} · {{ product.metadata.face_value_byn }} BYN @ {{ product.metadata.placement_fx_rate }}{% endif %}</div></div>
+                {% endif %}
                 <div class="meta-item"><strong>Currency</strong><div class="muted">{{ product.currency.code }} · {{ product.currency.name }}</div></div>
                 <div class="meta-item"><strong>Bought units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
                 <div class="meta-item"><strong>Redeemed units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
@@ -116,21 +120,33 @@
                 <div class="meta-item"><strong>External ID</strong><div class="muted">{{ product.external_id|default:'-' }}</div></div>
                 <div class="meta-item"><strong>Market value</strong><div class="muted">{{ product.market_value|floatformat:2 }} {{ product.currency.code }}</div></div>
                 <div class="meta-item"><strong>Status</strong><div class="muted">{% if product.is_active %}Active{% else %}Inactive{% endif %}</div></div>
-                <div class="meta-item"><strong>Created</strong><div class="muted">{{ product.created_at|date:'Y-m-d H:i' }}</div></div>
-                <div class="meta-item"><strong>Updated</strong><div class="muted">{{ product.updated_at|date:'Y-m-d H:i' }}</div></div>
+                <div class="meta-item"><strong>Created</strong><div class="muted">{{ product.created_at|display_datetime }}</div></div>
+                <div class="meta-item"><strong>Updated</strong><div class="muted">{{ product.updated_at|display_datetime }}</div></div>
             </div>
         </section>
 
         <section class="panel stack-md">
             <div>
                 <p class="eyebrow">Issue terms</p>
-                <h2>Token terms</h2>
+                <h2>{% if product.product_type == 'bond' %}Bond terms{% else %}Token terms{% endif %}</h2>
                 <p class="muted">Rate, maturity, and income schedule for this product.</p>
             </div>
 
             {% include 'products/partials/token_terms_form.html' %}
         </section>
     </div>
+
+    {% if product.product_type == 'bond' %}
+        <section class="panel stack-md">
+            <div>
+                <p class="eyebrow">Income calendar</p>
+                <h2>Coupon payment calendar</h2>
+                <p class="muted">Full coupon schedule with USD amount per bond for each payment date from the prospectus.</p>
+            </div>
+
+            {% include 'products/partials/income_calendar_form.html' %}
+        </section>
+    {% endif %}
 
     <section class="panel stack-md">
         <div>
@@ -141,7 +157,7 @@
         <div class="meta-list">
             <div class="meta-item"><strong>Institution website</strong><div class="muted">{{ product.institution.website|default:'-' }}</div></div>
             <div class="meta-item"><strong>Institution country</strong><div class="muted">{{ product.institution.country }}</div></div>
-            <div class="meta-item"><strong>Latest BYN rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.rate_byn|stringformat:'.6f' }} on {{ latest_rate.rate_date|date:'Y-m-d' }}{% else %}No rate history{% endif %}</div></div>
+            <div class="meta-item"><strong>Latest BYN rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.rate_byn|stringformat:'.6f' }} on {{ latest_rate.rate_date|display_date }}{% else %}No rate history{% endif %}</div></div>
             <div class="meta-item"><strong>USD cross rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.usd_cross_rate|stringformat:'.10f' }}{% else %}-{% endif %}</div></div>
         </div>
 
@@ -185,7 +201,7 @@
                 <tbody>
                     {% for transaction in transactions %}
                         <tr>
-                            <td>{{ transaction.occurred_at|date:'Y-m-d H:i' }}</td>
+                            <td>{{ transaction.occurred_at|display_datetime }}</td>
                             <td>{{ transaction.account.name }}</td>
                             <td>{{ transaction.get_transaction_type_display }}</td>
                             <td>{{ transaction.description|default:'-' }}</td>

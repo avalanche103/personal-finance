@@ -97,7 +97,13 @@ def recalculate_usd_valuations() -> dict:
 		snapshot.save(update_fields=['balance_usd', 'updated_at'])
 		updated['balance_snapshots'] += 1
 
+	from apps.common.services.indexed_bonds import is_indexed_bond, refresh_indexed_bond_valuation
+
 	for product in Product.objects.select_related('currency').all():
+		if is_indexed_bond(product):
+			if refresh_indexed_bond_valuation(product):
+				updated['products'] += 1
+			continue
 		rate = get_usd_conversion_rate(product.currency, today, rate_cache)
 		product.current_value_usd = (product.units or Decimal('0')) * (product.current_price or Decimal('0')) * rate
 		product.save(update_fields=['current_value_usd', 'updated_at'])

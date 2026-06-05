@@ -14,7 +14,7 @@
                 <tr>
                     <td>
                         <strong>{{ period.label }}</strong>
-                        <div class="muted">{{ period.reference_date|date:'Y-m-d' }}</div>
+                        <div class="muted">{{ period.reference_date|display_date }}</div>
                     </td>
                     <td class="text-right">${{ period.portfolio.baseline_usd|floatformat:2 }}</td>
                     <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.portfolio %}</td>

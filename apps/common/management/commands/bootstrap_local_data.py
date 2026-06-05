@@ -60,6 +60,26 @@ class Command(BaseCommand):
 				'metadata': {'bootstrap': True},
 			},
 		)
+		aigenis, _ = FinancialInstitution.objects.update_or_create(
+			slug='aigenis',
+			defaults={
+				'name': 'Aigenis',
+				'institution_type': FinancialInstitution.InstitutionType.BROKER,
+				'country': 'BY',
+				'base_currency': byn,
+				'metadata': {'bootstrap': True},
+			},
+		)
+		alfabank, _ = FinancialInstitution.objects.update_or_create(
+			slug='alfabank',
+			defaults={
+				'name': 'АльфаБанк',
+				'institution_type': FinancialInstitution.InstitutionType.BANK,
+				'country': 'BY',
+				'base_currency': byn,
+				'metadata': {'bootstrap': True},
+			},
+		)
 
 		ImportSource.objects.update_or_create(
 			code='nbrb-exrates-api',
@@ -79,6 +99,40 @@ class Command(BaseCommand):
 				'source_type': ImportSource.SourceType.XLS,
 				'is_active': True,
 				'config': {'parser': 'finstore-history', 'bootstrap': True},
+			},
+		)
+
+		ImportSource.objects.update_or_create(
+			code='aigenis-report',
+			defaults={
+				'institution': aigenis,
+				'name': 'Aigenis Broker Report',
+				'source_type': ImportSource.SourceType.XLS,
+				'is_active': True,
+				'config': {'parser': 'aigenis-report', 'bootstrap': True},
+			},
+		)
+
+		Account.objects.get_or_create(
+			institution=aigenis,
+			name='Aigenis BYN Account',
+			defaults={
+				'account_type': Account.AccountType.BROKERAGE,
+				'currency': byn,
+				'current_balance': Decimal('0.00'),
+				'current_balance_usd': Decimal('0.00'),
+				'metadata': {'bootstrap': True},
+			},
+		)
+		Account.objects.get_or_create(
+			institution=alfabank,
+			name='АльфаБанк BYN Account',
+			defaults={
+				'account_type': Account.AccountType.BANK,
+				'currency': byn,
+				'current_balance': Decimal('0.00'),
+				'current_balance_usd': Decimal('0.00'),
+				'metadata': {'bootstrap': True, 'purpose': 'coupon_income'},
 			},
 		)
 
@@ -103,5 +157,20 @@ class Command(BaseCommand):
 				account.account_type = Account.AccountType.BROKERAGE
 				account.currency = currency
 				account.save(update_fields=['account_type', 'currency', 'updated_at'])
+
+		from apps.common.services.aigenis_bonds import AIGENIS_INDEXED_BOND_ISINS, configure_aigenis_indexed_bonds
+		from apps.common.services.indexed_bonds import configure_aigenis_indexed_bond
+		from apps.products.models import Product
+
+		updated_bonds = configure_aigenis_indexed_bonds(institution=aigenis)
+		for isin in AIGENIS_INDEXED_BOND_ISINS:
+			product = Product.objects.filter(institution=aigenis, external_id=isin).first()
+			if product and not (
+				isinstance(product.metadata, dict)
+				and product.metadata.get('income_calendar', {}).get('payments')
+			):
+				configure_aigenis_indexed_bond(product)
+		if updated_bonds:
+			self.stdout.write(f'Configured {updated_bonds} Aigenis indexed bond(s).')
 
 		self.stdout.write(self.style.SUCCESS('Local bootstrap data created or updated.'))

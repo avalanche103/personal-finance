@@ -64,6 +64,7 @@ TEMPLATES = [
         'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
+            'builtins': ['apps.core.templatetags.pf_extras'],
             'context_processors': [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
@@ -120,7 +121,14 @@ TIME_ZONE = os.getenv('TIME_ZONE', 'Europe/Minsk')
 
 USE_I18N = True
 
+USE_L10N = False
+
 USE_TZ = True
+
+DATE_FORMAT = 'd.m.Y'
+SHORT_DATE_FORMAT = 'd.m.Y'
+DATETIME_FORMAT = 'd.m.Y H:i'
+DATE_INPUT_FORMATS = ['%d.%m.%Y', '%Y-%m-%d', '%d/%m/%Y']
 
 
 # Static files (CSS, JavaScript, Images)

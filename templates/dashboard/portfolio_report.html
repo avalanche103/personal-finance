@@ -16,7 +16,7 @@
         <form class="filter-bar" method="get">
             <label class="filter-field">
                 <span>As of date</span>
-                <input type="date" name="as_of" value="{{ as_of_date|date:'Y-m-d' }}">
+                <input type="text" name="as_of" class="form-control" value="{{ as_of_date|display_date }}" placeholder="дд.мм.гггг" inputmode="numeric">
             </label>
             <button type="submit" class="button">Build report</button>
         </form>
@@ -27,7 +27,7 @@
             <article class="metric-card accent-gold">
                 <span>Portfolio total</span>
                 <strong>${{ portfolio_usd|floatformat:2 }}</strong>
-                <small>As of {{ as_of_date|date:'Y-m-d' }}</small>
+                <small>As of {{ as_of_date|display_date }}</small>
             </article>
             <article class="metric-card accent-blue">
                 <span>Accounts total</span>
@@ -44,7 +44,7 @@
         {% include 'dashboard/partials/period_comparisons.html' %}
 
         {% if latest_snapshot %}
-            <p class="muted">Latest snapshot used in report window: {{ latest_snapshot.captured_at|date:'Y-m-d H:i' }}</p>
+            <p class="muted">Latest snapshot used in report window: {{ latest_snapshot.captured_at|display_datetime }}</p>
         {% else %}
             <p class="muted">No historical snapshots found yet. The report falls back to current balances and current product units.</p>
         {% endif %}

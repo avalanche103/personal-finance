@@ -10,13 +10,19 @@ from django.views.decorators.http import require_http_methods
 from apps.accounts.models import Transaction
 from apps.common.models import ExchangeRateHistory
 from apps.products.analytics import (
+    allocation_instrument_choices,
     build_portfolio_allocation,
     build_product_groups,
     build_product_performance_summary,
     build_product_position_summary,
     build_product_transaction_map,
 )
-from apps.products.forms import ProductTokenTermsForm
+from apps.common.services.indexed_bonds import (
+    build_income_calendar_rows,
+    build_product_income_calendar,
+    save_income_calendar_config,
+)
+from apps.products.forms import ProductIncomeCalendarForm, ProductTokenTermsForm
 from apps.products.models import Product
 from apps.products.services.token_terms import estimate_next_income_date, income_payment_dates
 
@@ -43,9 +49,16 @@ def _next_product_sort_dir(field: str, current_sort: str, current_dir: str) -> s
     return 'desc' if field in PRODUCT_NUMERIC_SORT_FIELDS else 'asc'
 
 
+def _resolve_allocation_type(request, *, valid_types: set[str] | None = None) -> str:
+    value = request.GET.get('allocation_type', '').strip().lower()
+    if valid_types is None:
+        valid_types = {choice[0] for choice in Product.ProductType.choices}
+    return value if value in valid_types else ''
+
+
 def _product_list_nav_params(request) -> dict[str, str]:
     params = {}
-    for key in ('q', 'show_closed', 'sort', 'dir'):
+    for key in ('q', 'show_closed', 'sort', 'dir', 'allocation_type'):
         value = request.GET.get(key, '').strip()
         if value:
             params[key] = value
@@ -123,6 +136,9 @@ def product_list(request):
     show_closed = request.GET.get('show_closed') == '1'
     sort_field, sort_dir = _resolve_product_sort(request)
     ordered_products = _product_list_queryset(request)
+    allocation_type_choices = allocation_instrument_choices(ordered_products)
+    available_allocation_types = {value for value, _label in allocation_type_choices}
+    allocation_type = _resolve_allocation_type(request, valid_types=available_allocation_types)
     transaction_map = build_product_transaction_map([product.id for product in ordered_products])
     context = {
         'product_groups': build_product_groups(
@@ -132,7 +148,12 @@ def product_list(request):
             sort_field=sort_field,
             sort_dir=sort_dir,
         ),
-        'portfolio_allocation': build_portfolio_allocation(ordered_products),
+        'portfolio_allocation': build_portfolio_allocation(
+            ordered_products,
+            instrument_type=allocation_type,
+        ),
+        'allocation_type': allocation_type,
+        'allocation_type_choices': allocation_type_choices,
         'query': query,
         'show_closed': show_closed,
         'search_includes_closed': bool(query and not show_closed),
@@ -179,6 +200,7 @@ def _build_product_detail_context(product: Product) -> dict:
         product.market_value,
         market_value_usd=product.current_value_usd,
         currency=product.currency,
+        product_type=product.product_type,
     )
     performance_summary = build_product_performance_summary(
         all_transactions,
@@ -200,13 +222,37 @@ def _build_product_detail_context(product: Product) -> dict:
 @require_http_methods(['GET', 'POST'])
 def product_detail(request, pk):
     product = get_object_or_404(
-        Product.objects.select_related('institution', 'currency'),
+        Product.objects.select_related('institution', 'currency', 'income_account', 'income_account__institution'),
         pk=pk,
     )
     terms_form = ProductTokenTermsForm(instance=product)
+    income_calendar_form = ProductIncomeCalendarForm(product=product)
 
     if request.method == 'POST':
         action = request.POST.get('action', 'save_terms')
+
+        if action == 'save_income_calendar':
+            income_calendar_form = ProductIncomeCalendarForm(request.POST, product=product)
+            if income_calendar_form.is_valid():
+                payment_amounts = {
+                    key.removeprefix('payment_usd_'): value
+                    for key, value in request.POST.items()
+                    if key.startswith('payment_usd_')
+                }
+                save_income_calendar_config(
+                    product,
+                    enabled=income_calendar_form.cleaned_data['enabled'],
+                    coupon_day=income_calendar_form.cleaned_data.get('coupon_day'),
+                    schedule_start_date=income_calendar_form.cleaned_data.get('schedule_start_date'),
+                    payment_amounts=payment_amounts,
+                )
+                product.refresh_from_db()
+                messages.success(request, 'Payment calendar saved.')
+            else:
+                messages.error(request, 'Could not save payment calendar settings.')
+            query = _product_list_nav_params(request)
+            url = reverse('products:detail', args=[product.pk])
+            return redirect(f'{url}?{urlencode(query)}' if query else url)
 
         if action == 'recompute_next_income':
             estimated = estimate_next_income_date(product)
@@ -215,7 +261,9 @@ def product_detail(request, pk):
             else:
                 product.next_income_date = estimated
                 product.save(update_fields=['next_income_date', 'updated_at'])
-                messages.success(request, f'Next income date set to {estimated.isoformat()}.')
+                from apps.common.dates import format_display_date
+
+                messages.success(request, f'Next income date set to {format_display_date(estimated)}.')
             query = _product_list_nav_params(request)
             url = reverse('products:detail', args=[product.pk])
             return redirect(f'{url}?{urlencode(query)}' if query else url)
@@ -234,6 +282,9 @@ def product_detail(request, pk):
 
     context = _build_product_detail_context(product)
     context['terms_form'] = terms_form
+    context['income_calendar_form'] = income_calendar_form
+    context['income_calendar_rows'] = build_income_calendar_rows(product)
+    context['income_calendar_events'] = build_product_income_calendar(product)
     context['estimated_next_income_date'] = estimate_next_income_date(product)
     context['income_payment_count'] = len(income_payment_dates(product))
     context.update(_product_navigation(request, product))

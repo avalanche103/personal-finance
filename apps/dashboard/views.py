@@ -8,6 +8,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
+from apps.common.dates import format_display_date
 from apps.common.services.exchange_rates import ensure_nbrb_rates_current, get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
 from apps.imports.models import ImportJob
@@ -85,7 +86,7 @@ def _portfolio_chart_payload(points: list[dict], range_key: str, mode_key: str) 
         'range': range_key,
         'mode': _resolve_portfolio_chart_mode(mode_key),
         'granularity': config['granularity'],
-        'dates': [point['date'].isoformat() for point in points],
+        'dates': [format_display_date(point['date']) for point in points],
         'values': values,
         'change_pct': change_pct,
         'change_usd': change_usd,
@@ -357,7 +358,7 @@ def exchange_rate_history(request):
     chart_series = {'USD': [], 'EUR': [], 'RUB': []}
     for row in rate_history:
         chart_series[row.currency.code].append({
-            'x': row.rate_date.isoformat(),
+            'x': format_display_date(row.rate_date),
             'y': float(row.usd_cross_rate),
             'byn': float(row.rate_byn),
         })
@@ -393,7 +394,11 @@ def exchange_rate_history(request):
 def portfolio_report(request):
     raw_date = request.GET.get('as_of')
     try:
-        as_of_date = timezone.datetime.fromisoformat(raw_date).date() if raw_date else timezone.localdate()
+        from apps.common.dates import parse_display_date
+
+        as_of_date = parse_display_date(raw_date) if raw_date else timezone.localdate()
+        if raw_date and as_of_date is None:
+            as_of_date = timezone.localdate()
     except ValueError:
         as_of_date = timezone.localdate()
 

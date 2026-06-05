@@ -92,4 +92,6 @@ class BalanceSnapshot(TimeStampedModel):
 		ordering = ['-captured_at', '-id']
 
 	def __str__(self) -> str:
-		return f'{self.institution} @ {self.captured_at:%Y-%m-%d %H:%M}'
+		from apps.common.dates import format_display_datetime
+
+		return f'{self.institution} @ {format_display_datetime(self.captured_at)}'

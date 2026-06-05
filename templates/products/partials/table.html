@@ -46,7 +46,7 @@
                             <td class="text-right">{{ product.current_value_usd|floatformat:2 }}</td>
                             <td class="text-right font-mono">
                                 {% if product.maturity_date %}
-                                    {{ product.maturity_date|date:'Y-m-d' }}
+                                    {{ product.maturity_date|display_date }}
                                 {% else %}
                                     —
                                 {% endif %}

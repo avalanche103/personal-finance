@@ -29,6 +29,7 @@ class ProductAdmin(admin.ModelAdmin):
 				'external_id',
 				'product_type',
 				'currency',
+				'income_account',
 				'is_active',
 			),
 		}),

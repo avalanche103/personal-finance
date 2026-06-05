@@ -24,6 +24,13 @@ class Product(TimeStampedModel):
 		OTHER = 'other', 'Other'
 
 	institution = models.ForeignKey('institutions.FinancialInstitution', on_delete=models.CASCADE, related_name='products')
+	income_account = models.ForeignKey(
+		'accounts.Account',
+		null=True,
+		blank=True,
+		on_delete=models.SET_NULL,
+		related_name='income_products',
+	)
 	name = models.CharField(max_length=255)
 	symbol = models.CharField(max_length=32, blank=True)
 	isin = models.CharField(max_length=32, blank=True)
@@ -62,6 +69,18 @@ class Product(TimeStampedModel):
 	@property
 	def market_value(self):
 		return self.units * self.current_price
+
+	@property
+	def bond_kind_display(self) -> str:
+		if self.product_type != self.ProductType.BOND:
+			return ''
+		labels = {
+			'indexed': 'Indexed bond',
+		}
+		kind = ''
+		if isinstance(self.metadata, dict):
+			kind = str(self.metadata.get('bond_kind', '')).strip()
+		return labels.get(kind, '')
 
 	@property
 	def finstore_token_id(self) -> str:

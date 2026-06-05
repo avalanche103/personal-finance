@@ -87,7 +87,9 @@ def build_operations_calendar(
     day_groups: dict[date, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
     for product in products:
-        if product.product_type != Product.ProductType.TOKEN or not product.is_active:
+        if not product.is_active:
+            continue
+        if product.product_type not in (Product.ProductType.TOKEN, Product.ProductType.BOND):
             continue
 
         label = product_group_label(*product_group_key(product))

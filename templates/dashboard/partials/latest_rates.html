@@ -3,7 +3,7 @@
         <article class="metric-card accent-gold">
             <span>{{ card.code }}</span>
             <strong>{{ card.display_rate_byn|floatformat:4 }} BYN</strong>
-            <small>{{ card.latest.rate_date|date:'Y-m-d' }}</small>
+            <small>{{ card.latest.rate_date|display_date }}</small>
             <small>per {{ card.latest.scale }} {{ card.code }}</small>
             {% if card.change_byn is not None %}
                 <small class="{% if card.change_byn > 0 %}delta-up{% elif card.change_byn < 0 %}delta-down{% else %}muted{% endif %}">

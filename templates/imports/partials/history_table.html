@@ -14,7 +14,7 @@
         <tbody>
             {% for job in jobs %}
                 <tr>
-                    <td class="font-mono">{{ job.created_at|date:'Y-m-d H:i' }}</td>
+                    <td class="font-mono">{{ job.created_at|display_datetime }}</td>
                     <td>{{ job.source.name }}</td>
                     <td>{{ job.original_filename|default:'Manual/API job' }}</td>
                     <td><span class="status-chip status-{{ job.status }}">{{ job.get_status_display }}</span></td>

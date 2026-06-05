@@ -27,7 +27,7 @@
             <span>{{ terms_form.next_income_date.label }}</span>
             {{ terms_form.next_income_date }}
             {% if estimated_next_income_date %}
-                <small class="muted">Forecast from history: <span class="font-mono">{{ estimated_next_income_date|date:'Y-m-d' }}</span></small>
+                <small class="muted">Forecast from history: <span class="font-mono">{{ estimated_next_income_date|display_date }}</span></small>
             {% endif %}
             {% if terms_form.next_income_date.errors %}
                 <span class="field-error">{{ terms_form.next_income_date.errors|join:', ' }}</span>
@@ -48,6 +48,6 @@
 
     <p class="muted">
         Finstore token ID: {{ product.finstore_token_id|default:'—' }}.
-        {% if product.terms_updated_at %}Last saved {{ product.terms_updated_at|date:'Y-m-d H:i' }}.{% endif %}
+        {% if product.terms_updated_at %}Last saved {{ product.terms_updated_at|display_datetime }}.{% endif %}
     </p>
 </form>

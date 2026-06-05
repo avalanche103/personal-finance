@@ -12,7 +12,7 @@
         <tbody>
             {% for tx in recent_transactions %}
                 <tr>
-                    <td class="font-mono">{{ tx.occurred_at|date:'Y-m-d' }}</td>
+                    <td class="font-mono">{{ tx.occurred_at|display_date }}</td>
                     <td>{{ tx.account.name }}</td>
                     <td>{{ tx.get_transaction_type_display }}</td>
                     <td>{{ tx.description|default:'—'|truncatechars:48 }}</td>

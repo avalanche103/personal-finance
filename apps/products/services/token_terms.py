@@ -103,7 +103,7 @@ def _parse_date(value: str) -> date | None:
 	text = (value or '').strip()
 	if not text:
 		return None
-	for fmt in ('%Y-%m-%d', '%d.%m.%Y', '%d/%m/%Y'):
+	for fmt in ('%d.%m.%Y', '%Y-%m-%d', '%d/%m/%Y'):
 		try:
 			return datetime.strptime(text, fmt).date()
 		except ValueError:
@@ -272,6 +272,23 @@ def estimate_next_income_amount(
 	payment_dates: list[date] | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
 	"""Coupon per period from annual_rate_pct, units, and price. Returns (native, usd)."""
+	from apps.common.services.indexed_bonds import latest_usd_byn_rate, planned_coupon_usd_per_unit
+
+	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product)
+	next_payment_date = product.next_income_date
+	if next_payment_date is None:
+		next_payment_date = estimate_next_income_date(product)
+	planned_usd = planned_coupon_usd_per_unit(product, next_payment_date)
+	if planned_usd is not None and (product.units or Decimal('0')) > 0:
+		amount_usd = (planned_usd * product.units).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+		usd_byn_rate = latest_usd_byn_rate()
+		if usd_byn_rate is None and isinstance(product.metadata, dict):
+			usd_byn_rate = _parse_decimal(str(product.metadata.get('placement_fx_rate', '')))
+		amount_native = None
+		if usd_byn_rate:
+			amount_native = (amount_usd * usd_byn_rate).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+		return amount_native, amount_usd
+
 	if product.annual_rate_pct is None or product.annual_rate_pct <= 0:
 		return None, None
 
@@ -279,7 +296,6 @@ def estimate_next_income_amount(
 	if principal <= 0:
 		return None, None
 
-	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product)
 	schedule = resolve_income_schedule(product, payment_dates)
 	if schedule == Product.IncomeSchedule.AT_MATURITY:
 		return None, None
@@ -402,6 +418,8 @@ def estimate_next_income_date(product: Product, *, today: date | None = None) ->
 		return None
 
 	if not payment_dates:
+		if product.next_income_date and product.next_income_date >= reference:
+			return product.next_income_date
 		return None
 
 	schedule = resolve_income_schedule(product, payment_dates)

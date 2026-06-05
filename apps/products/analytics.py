@@ -69,7 +69,15 @@ def _resolve_market_value_usd(position_summary: dict) -> Decimal:
     return market_value_usd
 
 
-def build_product_position_summary(transactions, market_value: Decimal, market_value_usd: Decimal | None = None, currency=None):
+def build_product_position_summary(
+    transactions,
+    market_value: Decimal,
+    market_value_usd: Decimal | None = None,
+    currency=None,
+    *,
+    product_type: str | None = None,
+):
+    include_trade_fees = product_type == Product.ProductType.BOND
     bought_units = Decimal('0')
     redeemed_units = Decimal('0')
     purchase_cost = Decimal('0')
@@ -91,6 +99,9 @@ def build_product_position_summary(transactions, market_value: Decimal, market_v
             redeemed_units += abs(quantity)
             returned_cash += amount
             returned_cash_usd += amount_usd
+        elif include_trade_fees and transaction.transaction_type == Transaction.TransactionType.FEE:
+            purchase_cost += abs(amount)
+            purchase_cost_usd += abs(amount_usd)
         elif transaction.transaction_type == Transaction.TransactionType.INCOME:
             passive_income += amount
             passive_income_usd += amount_usd
@@ -194,6 +205,8 @@ def build_product_performance_summary(transactions, position_summary, as_of_date
     }
 
 
+ISSUER_ALLOCATION_LIMIT = 10
+
 PRODUCT_GROUP_SORT_FIELDS = {
     'name': lambda product: (product.name.casefold(), product.pk),
     'institution': lambda product: (product.institution.name.casefold(), product.pk),
@@ -241,6 +254,7 @@ def build_product_groups(
             market_value,
             market_value_usd=market_value_usd,
             currency=product.currency,
+            product_type=product.product_type,
         )
         performance_summary = build_product_performance_summary(product_transactions, position_summary, as_of_date=as_of_date)
 
@@ -291,11 +305,29 @@ def build_product_groups(
     return list(grouped.values())
 
 
-def extract_token_issuer(product) -> str:
+def normalize_issuer_label(issuer: str) -> str:
+    normalized = str(issuer or '').strip()
+    if not normalized:
+        return normalized
+    lowered = normalized.casefold()
+    if 'aigenis' in lowered or 'айгенис' in lowered:
+        return 'Aigenis'
+    return normalized
+
+
+def extract_product_issuer(product) -> str:
     metadata = product.metadata if isinstance(product.metadata, dict) else {}
     issuer = str(metadata.get('issuer', '') or '').strip()
     if issuer:
-        return issuer
+        return normalize_issuer_label(issuer)
+
+    if product.product_type == Product.ProductType.BOND:
+        institution_slug = getattr(product.institution, 'slug', '')
+        if institution_slug == 'aigenis':
+            return 'Aigenis'
+        bond_name = str(product.name or '').strip()
+        if bond_name.casefold().startswith('айгенис'):
+            return 'Aigenis'
 
     for source in (product.external_id, product.name, product.symbol):
         candidate = str(source or '').strip()
@@ -312,6 +344,10 @@ def extract_token_issuer(product) -> str:
     return 'Unknown'
 
 
+def extract_token_issuer(product) -> str:
+    return extract_product_issuer(product)
+
+
 def _allocation_rows(bucket: dict[str, Decimal], total_usd: Decimal) -> list[dict]:
     rows = []
     for label, value_usd in sorted(bucket.items(), key=lambda item: item[1], reverse=True):
@@ -326,23 +362,47 @@ def _allocation_rows(bucket: dict[str, Decimal], total_usd: Decimal) -> list[dic
     return rows
 
 
-def build_portfolio_allocation(products) -> dict:
+def allocation_instrument_choices(products) -> list[tuple[str, str]]:
+    type_labels = dict(Product.ProductType.choices)
+    present_types = {product.product_type for product in products}
+    return [
+        (value, type_labels[value])
+        for value, _label in Product.ProductType.choices
+        if value in present_types
+    ]
+
+
+def products_for_allocation(products, instrument_type: str | None = None) -> list:
+    if not instrument_type:
+        return list(products)
+    return [product for product in products if product.product_type == instrument_type]
+
+
+def build_portfolio_allocation(products, *, instrument_type: str | None = None) -> dict:
+    scoped_products = products_for_allocation(products, instrument_type)
     by_institution: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
     by_group: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
     by_issuer: dict[str, Decimal] = defaultdict(lambda: Decimal('0'))
     total_usd = Decimal('0')
 
-    for product in products:
+    for product in scoped_products:
         value_usd = product.current_value_usd or Decimal('0')
         total_usd += value_usd
         by_institution[product.institution.name] += value_usd
         by_group[product_group_label(*product_group_key(product))] += value_usd
-        if product.product_type == Product.ProductType.TOKEN:
-            by_issuer[extract_token_issuer(product)] += value_usd
+        if product.product_type in (Product.ProductType.TOKEN, Product.ProductType.BOND):
+            by_issuer[extract_product_issuer(product)] += value_usd
+
+    instrument_label = ''
+    if instrument_type:
+        instrument_label = dict(Product.ProductType.choices).get(instrument_type, instrument_type)
 
     return {
+        'instrument_type': instrument_type or '',
+        'instrument_label': instrument_label,
+        'product_count': len(scoped_products),
         'total_usd': total_usd,
         'by_institution': _allocation_rows(by_institution, total_usd),
         'by_group': _allocation_rows(by_group, total_usd),
-        'by_issuer': _allocation_rows(by_issuer, total_usd),
+        'by_issuer': _allocation_rows(by_issuer, total_usd)[:ISSUER_ALLOCATION_LIMIT],
     }

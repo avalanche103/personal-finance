@@ -1,0 +1,75 @@
+<form method="post" class="stack-md income-calendar-form">
+    {% csrf_token %}
+
+    <div class="filter-bar token-terms-fields">
+        <label class="filter-field checkbox-field">
+            {{ income_calendar_form.enabled }}
+            <span>{{ income_calendar_form.enabled.label }}</span>
+        </label>
+        <label class="filter-field">
+            <span>{{ income_calendar_form.schedule_start_date.label }}</span>
+            {{ income_calendar_form.schedule_start_date }}
+            {% if income_calendar_form.schedule_start_date.errors %}
+                <span class="field-error">{{ income_calendar_form.schedule_start_date.errors|join:', ' }}</span>
+            {% endif %}
+        </label>
+        <label class="filter-field">
+            <span>{{ income_calendar_form.coupon_day.label }}</span>
+            {{ income_calendar_form.coupon_day }}
+            {% if income_calendar_form.coupon_day.errors %}
+                <span class="field-error">{{ income_calendar_form.coupon_day.errors|join:', ' }}</span>
+            {% endif %}
+        </label>
+    </div>
+
+    {% if income_calendar_rows %}
+        <p class="muted">
+            Full coupon schedule from first payment through maturity.
+            Enter USD coupon per 1 bond for each date from the prospectus.
+        </p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th class="text-right">Units</th>
+                        <th class="text-right">USD / unit</th>
+                        <th class="text-right">Total USD</th>
+                        <th class="text-right">Total BYN</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in income_calendar_rows %}
+                        <tr>
+                            <td>
+                                {{ row.date|display_date }}
+                                {% if row.is_past %}<span class="muted">(paid)</span>{% elif row.is_maturity_coupon %}<span class="muted">(maturity)</span>{% else %}<span class="muted">(planned)</span>{% endif %}
+                            </td>
+                            <td class="text-right font-mono">{{ row.units|floatformat:0 }}</td>
+                            <td class="text-right">
+                                <input
+                                    type="number"
+                                    class="form-control text-right font-mono"
+                                    name="payment_usd_{{ row.date_iso }}"
+                                    value="{% if row.coupon_usd_per_unit %}{{ row.coupon_usd_per_unit }}{% endif %}"
+                                    step="0.0001"
+                                    min="0"
+                                    placeholder="USD"
+                                    style="max-width: 8rem; margin-left: auto;"
+                                >
+                            </td>
+                            <td class="text-right font-mono">{{ row.amount_usd|default:'-' }}</td>
+                            <td class="text-right font-mono">{{ row.amount_byn|default:'-' }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="muted">Enable the calendar and set the first coupon date and maturity to build the full payment schedule.</p>
+    {% endif %}
+
+    <div class="form-actions">
+        <button type="submit" class="button" name="action" value="save_income_calendar">Save payment calendar</button>
+    </div>
+</form>

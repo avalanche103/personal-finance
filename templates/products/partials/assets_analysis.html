@@ -4,7 +4,26 @@
             <p class="eyebrow">Portfolio</p>
             <h2>Assets Analysis</h2>
         </div>
-        <span class="muted font-mono">{{ portfolio_allocation.total_usd|floatformat:2 }} USD</span>
+        <div class="allocation-header-controls">
+            <label class="filter-field allocation-filter-field">
+                <span class="muted">Instrument</span>
+                <select
+                    id="allocation-type-filter"
+                    name="allocation_type"
+                    form="product-filters"
+                    hx-get="{% url 'products:list' %}"
+                    hx-target="#product-table"
+                    hx-include="#product-filters"
+                    hx-trigger="change"
+                >
+                    <option value="" {% if not allocation_type %}selected{% endif %}>All instruments</option>
+                    {% for value, label in allocation_type_choices %}
+                        <option value="{{ value }}" {% if allocation_type == value %}selected{% endif %}>{{ label }}s</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <span class="muted font-mono">{{ portfolio_allocation.total_usd|floatformat:2 }} USD</span>
+        </div>
     </div>
 
     {% if portfolio_allocation.total_usd %}
@@ -45,7 +64,15 @@
 
             <div class="allocation-card">
                 <h3>Issuers</h3>
-                <p class="muted allocation-note">Token issuers are derived from the token name before the issue number.</p>
+                <p class="muted allocation-note">
+                    Top 10 issuers
+                    {% if portfolio_allocation.instrument_label %}
+                        within {{ portfolio_allocation.instrument_label|lower }}s
+                    {% else %}
+                        by portfolio value
+                    {% endif %}
+                    .
+                </p>
                 <div class="allocation-rows">
                     {% for row in portfolio_allocation.by_issuer %}
                         <div class="allocation-row">
@@ -58,7 +85,7 @@
                             </div>
                         </div>
                     {% empty %}
-                        <p class="empty-state">No tokens in the current list.</p>
+                        <p class="empty-state">No issuers in the current list.</p>
                     {% endfor %}
                 </div>
             </div>

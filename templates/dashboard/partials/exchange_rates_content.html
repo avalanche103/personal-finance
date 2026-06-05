@@ -5,7 +5,7 @@
         <article class="metric-card accent-blue">
             <span>{{ item.row.currency.code }}</span>
             <strong>{{ item.row.usd_cross_rate|floatformat:6 }} USD</strong>
-            <small>{{ item.row.rate_date }} · {{ item.display_rate_byn|floatformat:4 }} BYN per {{ item.display_scale }} {{ item.row.currency.code }}</small>
+            <small>{{ item.row.rate_date|display_date }} · {{ item.display_rate_byn|floatformat:4 }} BYN per {{ item.display_scale }} {{ item.row.currency.code }}</small>
         </article>
     {% endfor %}
 </section>
@@ -28,7 +28,7 @@
         <tbody>
             {% for row in rate_rows %}
                 <tr>
-                    <td>{{ row.rate_date|date:'Y-m-d' }}</td>
+                    <td>{{ row.rate_date|display_date }}</td>
                     <td>{{ row.currency.code }}</td>
                     <td class="text-right">{{ row.payload.Cur_OfficialRate|default:row.rate_byn|floatformat:4 }}</td>
                     <td class="text-right">{{ row.usd_cross_rate|floatformat:6 }}</td>

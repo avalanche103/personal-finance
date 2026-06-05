@@ -209,7 +209,7 @@
             </div>
             <a href="{% url 'dashboard:portfolio_report' %}">Open report</a>
         </div>
-        <p class="muted">As of {{ historical_reporting.as_of_date|date:'Y-m-d' }} vs prior month and year.</p>
+        <p class="muted">As of {{ historical_reporting.as_of_date|display_date }} vs prior month and year.</p>
         <section class="metric-grid compact-grid">
             <article class="metric-card metric-card--accent">
                 <span>Portfolio</span>
