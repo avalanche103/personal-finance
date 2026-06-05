@@ -1,5 +1,10 @@
 from pathlib import Path
 
+from apps.common.services.priorlife_insurance import (
+	is_priorlife_contributions_text,
+	parse_priorlife_contributions,
+	persist_priorlife_contributions,
+)
 from apps.common.services.stravita_pension import (
 	is_stravita_contributions_text,
 	is_stravita_extract_text,
@@ -43,6 +48,8 @@ class PDFImportParser(BaseImportParser):
 
 		if parser_hint == 'stravita-extract' or is_stravita_extract_text(preview_text):
 			return parse_stravita_extract(file_path)
+		if parser_hint == 'priorlife-contributions' or is_priorlife_contributions_text(preview_text):
+			return parse_priorlife_contributions(file_path)
 		if parser_hint == 'stravita-contributions' or is_stravita_contributions_text(preview_text):
 			return parse_stravita_contributions(file_path)
 
@@ -82,4 +89,6 @@ class PDFImportParser(BaseImportParser):
 			)
 		if parser_variant == 'stravita-contributions':
 			return persist_stravita_contributions(raw_import_file, result)
+		if parser_variant == 'priorlife-contributions':
+			return persist_priorlife_contributions(raw_import_file, result)
 		return 0

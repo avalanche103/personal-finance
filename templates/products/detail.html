@@ -59,7 +59,7 @@
                 <span>Transactions</span>
                 <strong>{{ transaction_count }}</strong>
             </div>
-            {% if product.product_type != 'pension' %}
+            {% if product.product_type != 'pension' and product.product_type != 'life_insurance' %}
                 <div class="info-card">
                     <span>Open units</span>
                     <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
@@ -77,6 +77,20 @@
                 <div class="info-card">
                     <span>Employer subsidy</span>
                     <strong>{{ pension_summary.employer_subsidy_byn|floatformat:2 }} BYN</strong>
+                </div>
+            {% endif %}
+            {% if product.product_type == 'life_insurance' and life_insurance_summary %}
+                <div class="info-card">
+                    <span>Gross premiums</span>
+                    <strong>{{ life_insurance_summary.paid_contributions_gross|floatformat:2 }} {{ product.currency.code }}</strong>
+                </div>
+                <div class="info-card">
+                    <span>Net invested</span>
+                    <strong>{{ life_insurance_summary.net_contributions|floatformat:2 }} {{ product.currency.code }}</strong>
+                </div>
+                <div class="info-card">
+                    <span>Yield in account</span>
+                    <strong>{{ life_insurance_summary.accrued_yield_in_account|floatformat:2 }} {{ product.currency.code }}</strong>
                 </div>
             {% endif %}
             <div class="info-card">
@@ -143,6 +157,9 @@
                 {% if product.product_type == 'pension' %}
                     <h2>Pension terms</h2>
                     <p class="muted">DNPS contract details and accumulated balance from Stravita statement.</p>
+                {% elif product.product_type == 'life_insurance' %}
+                    <h2>Life insurance terms</h2>
+                    <p class="muted">Priorlife contract details and accumulated balance from statement.</p>
                 {% elif product.product_type == 'bond' %}
                     <h2>Bond terms</h2>
                     <p class="muted">Rate, maturity, and income schedule for this product.</p>
@@ -154,6 +171,8 @@
 
             {% if product.product_type == 'pension' %}
                 {% include 'products/partials/pension_terms.html' %}
+            {% elif product.product_type == 'life_insurance' %}
+                {% include 'products/partials/life_insurance_terms.html' %}
             {% else %}
                 {% include 'products/partials/token_terms_form.html' %}
             {% endif %}

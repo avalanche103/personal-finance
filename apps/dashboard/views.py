@@ -13,7 +13,11 @@ from apps.common.services.exchange_rates import ensure_nbrb_rates_current, get_u
 from apps.common.models import ExchangeRateHistory
 from apps.imports.models import ImportJob
 from apps.institutions.models import FinancialInstitution
-from apps.products.analytics import build_product_groups, build_product_transaction_map
+from apps.products.analytics import (
+    build_product_groups,
+    build_product_transaction_map,
+    reconstruct_insurance_product_value_native,
+)
 from apps.products.models import Product
 from apps.products.operations_calendar import build_operations_calendar
 
@@ -218,12 +222,37 @@ def _account_value_as_of(account: Account, as_of_date, rate_cache: dict) -> Deci
 
 
 def _product_market_value_native(product: Product, *, units: Decimal) -> Decimal:
-    if product.product_type == Product.ProductType.PENSION:
+    if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
         return units
     return units * (product.current_price or Decimal('0'))
 
 
-def _product_value_as_of(product: Product, as_of_date, rate_cache: dict) -> Decimal:
+def _product_value_as_of(
+    product: Product,
+    as_of_date,
+    rate_cache: dict,
+    *,
+    transaction_map: dict[int, list[Transaction]] | None = None,
+) -> Decimal:
+    rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
+    if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
+        snapshot = (
+            product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
+            .order_by('-captured_at', '-id')
+            .first()
+        )
+        transactions = (transaction_map or {}).get(product.id, [])
+        native_value = reconstruct_insurance_product_value_native(
+            transactions,
+            as_of_date,
+            product_type=product.product_type,
+        )
+        if snapshot and snapshot.captured_at.date() <= as_of_date:
+            snapshot_date = snapshot.captured_at.date()
+            if native_value == 0 or as_of_date == snapshot_date:
+                native_value = snapshot.balance
+        return native_value * rate
+
     snapshot = (
         product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
         .order_by('-captured_at', '-id')
@@ -233,7 +262,6 @@ def _product_value_as_of(product: Product, as_of_date, rate_cache: dict) -> Deci
         units = snapshot.balance
     else:
         units = product.units or Decimal('0')
-    rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
     return _product_market_value_native(product, units=units) * rate
 
 
@@ -247,6 +275,12 @@ def _historical_portfolio_context(as_of_date):
 
     accounts = list(Account.objects.select_related('institution', 'currency').all())
     products = list(Product.objects.select_related('institution', 'currency').all())
+    insurance_product_ids = [
+        product.id
+        for product in products
+        if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE)
+    ]
+    transaction_map = build_product_transaction_map(insurance_product_ids)
 
     institution_map: dict[int, dict] = {}
     for account in accounts:
@@ -260,7 +294,7 @@ def _historical_portfolio_context(as_of_date):
         bucket['accounts_usd'] += value_usd
 
     for product in products:
-        value_usd = _product_value_as_of(product, as_of_date, rate_cache)
+        value_usd = _product_value_as_of(product, as_of_date, rate_cache, transaction_map=transaction_map)
         total_products_usd += value_usd
         product_rows.append({'product': product, 'value_usd': value_usd})
         bucket = institution_map.setdefault(

@@ -1,0 +1,94 @@
+<div class="meta-list">
+    <div class="meta-item">
+        <strong>Program</strong>
+        <div class="muted">{{ product.life_insurance_program_display|default:'Life insurance' }}</div>
+    </div>
+    {% if product.metadata.contract_number %}
+        <div class="meta-item">
+            <strong>Contract</strong>
+            <div class="muted">№ {{ product.metadata.contract_number }}{% if product.metadata.contract_date %} · {{ product.metadata.contract_date }}{% endif %}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.contract_start and product.metadata.contract_end %}
+        <div class="meta-item">
+            <strong>Contract period</strong>
+            <div class="muted">{{ product.metadata.contract_start }} — {{ product.metadata.contract_end }}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.premium_amount %}
+        <div class="meta-item">
+            <strong>Premium</strong>
+            <div class="muted">{{ product.metadata.premium_amount }} {{ product.metadata.premium_currency|default:product.currency.code }} · {{ product.metadata.premium_schedule|default:'monthly' }}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.guaranteed_yield_pct %}
+        <div class="meta-item">
+            <strong>Guaranteed yield</strong>
+            <div class="muted">{{ product.metadata.guaranteed_yield_pct }}%</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.contract_load_pct %}
+        <div class="meta-item">
+            <strong>Contract load</strong>
+            <div class="muted">{{ product.metadata.contract_load_pct }}% deducted from each premium</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.as_of_date %}
+        <div class="meta-item">
+            <strong>Statement date</strong>
+            <div class="muted">{{ product.metadata.as_of_date }}</div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.accumulated_amount %}
+        <div class="meta-item">
+            <strong>Accumulated balance</strong>
+            <div class="muted">{{ life_insurance_summary.accumulated_amount|floatformat:2 }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.paid_contributions_gross %}
+        <div class="meta-item">
+            <strong>Gross premiums paid</strong>
+            <div class="muted">{{ life_insurance_summary.paid_contributions_gross|floatformat:2 }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.net_contributions %}
+        <div class="meta-item">
+            <strong>Net invested after load</strong>
+            <div class="muted">{{ life_insurance_summary.net_contributions|floatformat:2 }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.contract_load_deducted %}
+        <div class="meta-item">
+            <strong>Load deducted</strong>
+            <div class="muted">{{ life_insurance_summary.contract_load_deducted|floatformat:2 }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.accrued_yield_in_account %}
+        <div class="meta-item">
+            <strong>Yield in account</strong>
+            <div class="muted">{{ life_insurance_summary.accrued_yield_in_account|floatformat:2 }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.accrued_yield_reported %}
+        <div class="meta-item">
+            <strong>Yield in cabinet</strong>
+            <div class="muted">{{ life_insurance_summary.accrued_yield_reported|floatformat:2 }} {{ product.currency.code }} <span class="muted">(reported by insurer)</span></div>
+        </div>
+    {% endif %}
+    {% if life_insurance_summary.additional_accrued_yield_in_account %}
+        <div class="meta-item">
+            <strong>Additional yield in account</strong>
+            <div class="muted">{{ life_insurance_summary.additional_accrued_yield_in_account|floatformat:2 }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.future_payments_total %}
+        <div class="meta-item">
+            <strong>Future premiums</strong>
+            <div class="muted">{{ product.metadata.future_payments_total }} {{ product.currency.code }}</div>
+        </div>
+    {% endif %}
+    <div class="meta-item">
+        <strong>Liquidity</strong>
+        <div class="muted">Locked until maturity{% if product.maturity_date %} ({{ product.maturity_date|display_date }}){% endif %}</div>
+    </div>
+</div>

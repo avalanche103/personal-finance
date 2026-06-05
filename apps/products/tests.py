@@ -1,5 +1,5 @@
 from decimal import Decimal
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.test import TestCase
 from django.urls import reverse
@@ -14,6 +14,7 @@ from apps.products.analytics import (
 	build_product_performance_summary,
 	build_product_position_summary,
 	extract_token_issuer,
+	reconstruct_insurance_product_value_native,
 )
 from apps.products.models import Product
 
@@ -704,3 +705,126 @@ class ProductPositionSummaryTests(TestCase):
 		self.assertEqual(summary['purchase_cost'], Decimal('100'))
 		self.assertIsNotNone(performance['xirr'])
 		self.assertIsNotNone(performance['xirr_pct'])
+
+	def test_life_insurance_xirr_uses_negative_premium_outflows(self):
+		account = Account.objects.create(
+			institution=FinancialInstitution.objects.create(name='Premiums', institution_type=FinancialInstitution.InstitutionType.OTHER),
+			name='Insurance premiums',
+			currency=Currency.objects.create(code='USD', name='US Dollar', symbol='$', usd_rate=Decimal('1')),
+		)
+		product = Product.objects.create(
+			institution=FinancialInstitution.objects.create(name='Priorlife', institution_type=FinancialInstitution.InstitutionType.INSURANCE),
+			name='Priorlife',
+			product_type=Product.ProductType.LIFE_INSURANCE,
+			currency=account.currency,
+			units=Decimal('1'),
+			current_price=Decimal('3684.14'),
+			current_value_usd=Decimal('3684.14'),
+		)
+		transactions = [
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				currency=account.currency,
+				amount=Decimal('25'),
+				amount_usd=Decimal('25'),
+				occurred_at=timezone.now() - timedelta(days=365),
+			),
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				currency=account.currency,
+				amount=Decimal('25'),
+				amount_usd=Decimal('25'),
+				occurred_at=timezone.now() - timedelta(days=30),
+			),
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.INCOME,
+				currency=account.currency,
+				amount=Decimal('947.14'),
+				amount_usd=Decimal('947.14'),
+				occurred_at=timezone.now() - timedelta(days=1),
+				metadata={'income_kind': 'accrued_yield_in_account'},
+			),
+		]
+		summary = build_product_position_summary(
+			transactions,
+			market_value=Decimal('3684.14'),
+			market_value_usd=Decimal('3684.14'),
+			product_type=Product.ProductType.LIFE_INSURANCE,
+		)
+		performance = build_product_performance_summary(
+			transactions,
+			summary,
+			as_of_date=timezone.localdate(),
+			product_type=Product.ProductType.LIFE_INSURANCE,
+		)
+
+		self.assertEqual(summary['purchase_cost'], Decimal('50'))
+		self.assertEqual(summary['passive_income'], Decimal('0'))
+		self.assertIsNotNone(performance['xirr'])
+		self.assertIsNotNone(performance['xirr_pct'])
+
+	def test_reconstruct_life_insurance_value_grows_with_deposits_and_yield(self):
+		usd = Currency.objects.create(code='USD2', name='US Dollar 2', symbol='$', usd_rate=Decimal('1'))
+		institution = FinancialInstitution.objects.create(
+			name='Priorlife Test',
+			institution_type=FinancialInstitution.InstitutionType.INSURANCE,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Premiums',
+			currency=usd,
+		)
+		product = Product.objects.create(
+			institution=institution,
+			name='Priorlife test',
+			product_type=Product.ProductType.LIFE_INSURANCE,
+			currency=usd,
+			units=Decimal('1'),
+		)
+		transactions = [
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				currency=usd,
+				amount=Decimal('25'),
+				occurred_at=timezone.make_aware(timezone.datetime(2016, 7, 27, 12, 0)),
+				metadata={'net_amount': '23.00'},
+			),
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.INCOME,
+				currency=usd,
+				amount=Decimal('5'),
+				occurred_at=timezone.make_aware(timezone.datetime(2016, 7, 31, 12, 0)),
+			),
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				currency=usd,
+				amount=Decimal('25'),
+				occurred_at=timezone.make_aware(timezone.datetime(2016, 8, 14, 12, 0)),
+				metadata={'net_amount': '23.00'},
+			),
+		]
+		july_value = reconstruct_insurance_product_value_native(
+			transactions,
+			date(2016, 7, 31),
+			product_type=Product.ProductType.LIFE_INSURANCE,
+		)
+		august_value = reconstruct_insurance_product_value_native(
+			transactions,
+			date(2016, 8, 31),
+			product_type=Product.ProductType.LIFE_INSURANCE,
+		)
+		self.assertEqual(july_value, Decimal('28'))
+		self.assertEqual(august_value, Decimal('51'))
+		self.assertGreater(august_value, july_value)

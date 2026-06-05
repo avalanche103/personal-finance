@@ -359,7 +359,7 @@ h3 {
 }
 
 .hero-card {
-    padding: 1.25rem 1.5rem;
+    padding: calc(1.25rem * 1.15) 1.5rem;
 }
 
 .hero-label {
@@ -368,19 +368,19 @@ h3 {
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-secondary);
-    margin-bottom: 0.35rem;
+    margin-bottom: calc(0.35rem * 1.15);
 }
 
 .hero-value {
     font-size: 2.25rem;
     font-weight: 500;
-    line-height: 1.1;
+    line-height: calc(1.1 * 1.15);
     color: var(--text);
     margin: 0;
 }
 
 .hero-meta {
-    margin-top: 0.5rem;
+    margin-top: calc(0.5rem * 1.15);
     font-size: 0.8125rem;
     color: var(--text-secondary);
 }

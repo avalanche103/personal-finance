@@ -14,6 +14,7 @@ class Product(TimeStampedModel):
 		DEPOSIT = 'deposit', 'Deposit'
 		ETF = 'etf', 'ETF'
 		PENSION = 'pension', 'Pension'
+		LIFE_INSURANCE = 'life_insurance', 'Life insurance'
 		OTHER = 'other', 'Other'
 
 	class IncomeSchedule(models.TextChoices):
@@ -88,6 +89,14 @@ class Product(TimeStampedModel):
 		return self.product_type == self.ProductType.PENSION
 
 	@property
+	def is_life_insurance_product(self) -> bool:
+		return self.product_type == self.ProductType.LIFE_INSURANCE
+
+	@property
+	def is_unit_valued_insurance_product(self) -> bool:
+		return self.is_pension_product or self.is_life_insurance_product
+
+	@property
 	def pension_program_display(self) -> str:
 		if not self.is_pension_product:
 			return ''
@@ -96,6 +105,26 @@ class Product(TimeStampedModel):
 			if program == 'dnps_state':
 				return 'ДНПС с участием государства'
 		return 'Pension'
+
+	@property
+	def life_insurance_program_display(self) -> str:
+		if not self.is_life_insurance_product:
+			return ''
+		if isinstance(self.metadata, dict):
+			program = str(self.metadata.get('program', '')).strip()
+			labels = {
+				'zabota_o_buduschem': 'Забота о будущем',
+				'zabota_kompleks': 'Забота о будущем — комплекс',
+				'pro100': 'Pro100',
+				'pro75': 'Pro75',
+				'pension_capital': 'Пенсионный капитал',
+			}
+			if program in labels:
+				return labels[program]
+			insurance_type = str(self.metadata.get('insurance_type', '')).strip()
+			if insurance_type:
+				return insurance_type
+		return 'Life insurance'
 
 	@property
 	def finstore_token_id(self) -> str:

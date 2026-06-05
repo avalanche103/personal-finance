@@ -46,7 +46,36 @@ def _to_decimal(value) -> Decimal:
 		return Decimal('0')
 	if isinstance(value, Decimal):
 		return value
-	return Decimal(str(value).strip().replace(',', '.'))
+	return Decimal(str(value).strip().replace(' ', '').replace(',', '.'))
+
+
+def reconstruct_insurance_product_value_native(
+	transactions,
+	as_of_date: date,
+	*,
+	product_type: str,
+) -> Decimal:
+	value = Decimal('0')
+	for transaction in transactions:
+		if transaction.occurred_at.date() > as_of_date:
+			continue
+		amount = transaction.amount or Decimal('0')
+		if amount == 0:
+			continue
+		if transaction.transaction_type == Transaction.TransactionType.DEPOSIT:
+			metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+			if product_type == Product.ProductType.PENSION:
+				employee_share = metadata.get('employee_share_byn')
+				if employee_share not in (None, ''):
+					value += _to_decimal(employee_share)
+				else:
+					value += abs(amount) / Decimal('2')
+			elif product_type == Product.ProductType.LIFE_INSURANCE:
+				net_amount = metadata.get('net_amount')
+				value += _to_decimal(net_amount) if net_amount not in (None, '') else abs(amount)
+		elif transaction.transaction_type == Transaction.TransactionType.INCOME:
+			value += amount
+	return value
 
 
 def _resolve_amount_usd(transaction: Transaction) -> Decimal:
@@ -107,11 +136,18 @@ def build_product_position_summary(
             employee_share = metadata.get('employee_share_byn')
             employer_share = metadata.get('employer_share_byn')
             employee_amount = _to_decimal(employee_share) if employee_share not in (None, '') else abs(amount) / Decimal('2')
-            employer_amount = _to_decimal(employer_share) if employer_share not in (None, '') else abs(amount) / Decimal('2')
             employee_amount_usd = employee_amount * (abs(amount_usd) / abs(amount)) if amount else Decimal('0')
             bought_units += abs(amount)
             purchase_cost += employee_amount
             purchase_cost_usd += employee_amount_usd
+            continue
+        if (
+            product_type == Product.ProductType.LIFE_INSURANCE
+            and transaction.transaction_type == Transaction.TransactionType.DEPOSIT
+        ):
+            bought_units += abs(amount)
+            purchase_cost += abs(amount)
+            purchase_cost_usd += abs(amount_usd)
             continue
         if quantity > 0:
             bought_units += quantity
@@ -125,8 +161,9 @@ def build_product_position_summary(
             purchase_cost += abs(amount)
             purchase_cost_usd += abs(amount_usd)
         elif transaction.transaction_type == Transaction.TransactionType.INCOME:
-            passive_income += amount
-            passive_income_usd += amount_usd
+            if product_type != Product.ProductType.LIFE_INSURANCE:
+                passive_income += amount
+                passive_income_usd += amount_usd
 
     avg_entry_price = purchase_cost / bought_units if bought_units else Decimal('0')
     open_units = max(sum((transaction.quantity or Decimal('0')) for transaction in transactions), Decimal('0'))
@@ -238,6 +275,12 @@ def build_performance_cash_flows(
     if product_type == Product.ProductType.PENSION:
         cash_flows = [
             (tx.occurred_at.date(), -_employee_contribution_usd(tx))
+            for tx in transactions
+            if tx.transaction_type == Transaction.TransactionType.DEPOSIT and (tx.amount or tx.amount_usd)
+        ]
+    elif product_type == Product.ProductType.LIFE_INSURANCE:
+        cash_flows = [
+            (tx.occurred_at.date(), -abs(_resolve_amount_usd(tx)))
             for tx in transactions
             if tx.transaction_type == Transaction.TransactionType.DEPOSIT and (tx.amount or tx.amount_usd)
         ]
@@ -401,6 +444,8 @@ def normalize_issuer_label(issuer: str) -> str:
         return 'Aigenis'
     if 'stravita' in lowered or 'стравита' in lowered:
         return 'Стравита'
+    if 'priorlife' in lowered or 'приорлайф' in lowered:
+        return 'Приорлайф'
     return normalized
 
 
@@ -414,6 +459,14 @@ def extract_product_issuer(product) -> str:
         institution_slug = getattr(product.institution, 'slug', '')
         if institution_slug == 'stravita':
             return 'Стравита'
+        institution_name = str(getattr(product.institution, 'name', '') or '').strip()
+        if institution_name:
+            return normalize_issuer_label(institution_name)
+
+    if product.product_type == Product.ProductType.LIFE_INSURANCE:
+        institution_slug = getattr(product.institution, 'slug', '')
+        if institution_slug == 'priorlife':
+            return 'Приорлайф'
         institution_name = str(getattr(product.institution, 'name', '') or '').strip()
         if institution_name:
             return normalize_issuer_label(institution_name)
@@ -491,6 +544,7 @@ def build_portfolio_allocation(products, *, instrument_type: str | None = None) 
             Product.ProductType.TOKEN,
             Product.ProductType.BOND,
             Product.ProductType.PENSION,
+            Product.ProductType.LIFE_INSURANCE,
         ):
             by_issuer[extract_product_issuer(product)] += value_usd
 

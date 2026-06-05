@@ -28,6 +28,27 @@ from apps.products.models import Product
 from apps.products.services.token_terms import estimate_next_income_date, income_payment_dates
 
 
+def _metadata_decimal(metadata: dict, key: str) -> Decimal:
+    value = metadata.get(key)
+    if value in (None, ''):
+        return Decimal('0')
+    return Decimal(str(value).strip().replace(' ', '').replace(',', '.'))
+
+
+def _product_performance_as_of_date(product: Product):
+    metadata = product.metadata if isinstance(product.metadata, dict) else {}
+    raw_as_of = str(metadata.get('as_of_date', '') or '').strip()
+    if raw_as_of:
+        for fmt in ('%Y-%m-%d', '%d.%m.%Y'):
+            try:
+                from datetime import datetime
+
+                return datetime.strptime(raw_as_of, fmt).date()
+            except ValueError:
+                continue
+    return timezone.localdate()
+
+
 PRODUCT_SORT_FIELDS = ('name', 'institution', 'type', 'currency', 'units', 'value_usd', 'value_byn', 'maturity_date')
 PRODUCT_NUMERIC_SORT_FIELDS = {'units', 'value_usd', 'value_byn'}
 
@@ -206,11 +227,12 @@ def _build_product_detail_context(product: Product) -> dict:
     performance_summary = build_product_performance_summary(
         all_transactions,
         position_summary,
-        as_of_date=timezone.localdate(),
+        as_of_date=_product_performance_as_of_date(product),
         product_type=product.product_type,
     )
 
     pension_summary = None
+    life_insurance_summary = None
     if product.product_type == Product.ProductType.PENSION:
         metadata = product.metadata if isinstance(product.metadata, dict) else {}
         pension_summary = {
@@ -219,6 +241,20 @@ def _build_product_detail_context(product: Product) -> dict:
             'total_contributions_byn': position_summary['purchase_cost'] + position_summary.get('employer_subsidy', Decimal('0')),
             'management_expense_pct': metadata.get('management_expense_pct'),
             'insurance_sum_byn': metadata.get('insurance_sum_byn'),
+        }
+    elif product.product_type == Product.ProductType.LIFE_INSURANCE:
+        metadata = product.metadata if isinstance(product.metadata, dict) else {}
+        life_insurance_summary = {
+            'paid_contributions_gross': _metadata_decimal(metadata, 'paid_contributions_gross') or _metadata_decimal(metadata, 'paid_contributions_total'),
+            'net_contributions': _metadata_decimal(metadata, 'net_contributions_total'),
+            'contract_load_deducted': _metadata_decimal(metadata, 'contract_load_deducted_total'),
+            'accrued_yield_reported': _metadata_decimal(metadata, 'accrued_yield_reported'),
+            'accrued_yield_in_account': _metadata_decimal(metadata, 'accrued_yield_in_account'),
+            'additional_accrued_yield_in_account': _metadata_decimal(metadata, 'additional_accrued_yield_in_account'),
+            'accumulated_amount': _metadata_decimal(metadata, 'accumulated_amount') or product.current_price,
+            'contract_load_pct': metadata.get('contract_load_pct'),
+            'guaranteed_yield_pct': metadata.get('guaranteed_yield_pct'),
+            'future_payments_total': metadata.get('future_payments_total'),
         }
 
     return {
@@ -230,6 +266,7 @@ def _build_product_detail_context(product: Product) -> dict:
         'position_summary': position_summary,
         'performance_summary': performance_summary,
         'pension_summary': pension_summary,
+        'life_insurance_summary': life_insurance_summary,
     }
 
 

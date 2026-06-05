@@ -8,7 +8,11 @@ from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
-from apps.dashboard.views import _portfolio_chart_payload, _portfolio_chart_points
+from apps.dashboard.views import (
+	_historical_portfolio_context,
+	_portfolio_chart_payload,
+	_portfolio_chart_points,
+)
 from apps.products.models import Product
 
 
@@ -187,6 +191,73 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertLess(response.context['portfolio_usd'], Decimal('10000'))
 		self.assertLess(response.context['products_total_usd'], Decimal('5000'))
+
+	def test_historical_portfolio_reconstructs_life_insurance_from_transactions(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Priorlife Chart Test',
+			slug='priorlife-chart-test',
+			institution_type=FinancialInstitution.InstitutionType.INSURANCE,
+			base_currency=usd,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Priorlife premiums',
+			currency=usd,
+		)
+		product = Product.objects.create(
+			institution=institution,
+			name='Priorlife contract',
+			product_type=Product.ProductType.LIFE_INSURANCE,
+			currency=usd,
+			units=Decimal('1'),
+			current_price=Decimal('3684.14'),
+			current_value_usd=Decimal('3684.14'),
+			external_id='TEST-PRIORLIFE-CHART',
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=usd,
+			amount=Decimal('25'),
+			occurred_at=timezone.make_aware(timezone.datetime(2016, 7, 27, 12, 0)),
+			metadata={'net_amount': '23.00'},
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.INCOME,
+			currency=usd,
+			amount=Decimal('5'),
+			occurred_at=timezone.make_aware(timezone.datetime(2016, 7, 31, 12, 0)),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=product,
+			currency=usd,
+			balance=Decimal('3684.14'),
+			balance_usd=Decimal('3684.14'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 6, 5, 12, 0)),
+		)
+
+		before_import = _historical_portfolio_context(date(2026, 6, 4))
+		on_import = _historical_portfolio_context(date(2026, 6, 5))
+		early = _historical_portfolio_context(date(2016, 7, 31))
+
+		product_row_before = next(
+			row for row in before_import['product_rows'] if row['product'].id == product.id
+		)
+		product_row_on = next(
+			row for row in on_import['product_rows'] if row['product'].id == product.id
+		)
+		product_row_early = next(
+			row for row in early['product_rows'] if row['product'].id == product.id
+		)
+		self.assertEqual(product_row_early['value_usd'], Decimal('28'))
+		self.assertEqual(product_row_before['value_usd'], Decimal('28'))
+		self.assertNotEqual(product_row_before['value_usd'], Decimal('1'))
+		self.assertEqual(product_row_on['value_usd'], Decimal('3684.14'))
 
 	def test_dashboard_group_shows_xirr_for_custom_product_group(self):
 		usd = Currency.objects.get(code='USD')

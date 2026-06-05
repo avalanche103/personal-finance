@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,11 @@ from django.urls import reverse
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
+from apps.common.services.priorlife_insurance import (
+	compute_priorlife_balances,
+	parse_priorlife_contributions,
+	spread_yield_by_contribution_months,
+)
 from apps.common.services.stravita_pension import parse_stravita_contributions, parse_stravita_extract
 from apps.imports.models import ImportJob, ImportSource
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
@@ -404,5 +410,120 @@ class StravitaPensionImportTests(TestCase):
 		contributions_through_may = contributions.filter(occurred_at__date__lte='2026-05-01')
 		total_through_may = sum((tx.amount for tx in contributions_through_may), Decimal('0'))
 		self.assertEqual(str(total_through_may), '4668.78')
+
+
+class PriorlifeInsuranceImportTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def _pdf_path(self, filename: str) -> Path:
+		path = Path(settings.BASE_DIR) / filename
+		self.assertTrue(path.exists(), f'Missing fixture PDF: {path}')
+		return path
+
+	def test_parse_priorlife_contributions_pdf(self):
+		result = parse_priorlife_contributions(self._pdf_path('Priorlife_1.pdf'))
+		self.assertEqual(result.metadata['parser_variant'], 'priorlife-contributions')
+		self.assertEqual(result.metadata['account_number'], '210004070')
+		self.assertEqual(result.metadata['rows'], 119)
+		statement = result.artifacts['statement']
+		self.assertEqual(statement['as_of_date'], '2026-06-05')
+		self.assertEqual(statement['paid_contributions_total'], '2975.00')
+		self.assertEqual(statement['total_contract_premium'], '4500.00')
+		self.assertEqual(statement['future_payments_total'], '1525.00')
+
+	def test_parse_priorlife_contributions_pdf_contract_210004069(self):
+		result = parse_priorlife_contributions(self._pdf_path('Priorlife_2.pdf'))
+		statement = result.artifacts['statement']
+		self.assertEqual(result.metadata['account_number'], '210004069')
+		self.assertEqual(statement['contract_end'], '27.07.2029')
+		self.assertEqual(result.metadata['rows'], 119)
+
+	def test_compute_priorlife_balances_with_contract_load(self):
+		balances = compute_priorlife_balances(
+			gross_paid=Decimal('2975'),
+			load_pct=Decimal('8'),
+			accumulated_amount=Decimal('3684.14'),
+			accrued_yield_reported=Decimal('1867.14'),
+		)
+		self.assertEqual(balances['paid_contributions_gross'], '2975')
+		self.assertEqual(balances['net_contributions_total'], '2737.00')
+		self.assertEqual(balances['contract_load_deducted_total'], '238.00')
+		self.assertEqual(balances['accumulated_amount'], '3684.14')
+		self.assertEqual(balances['accrued_yield_in_account'], '947.14')
+		self.assertEqual(balances['accrued_yield_reported'], '1867.14')
+
+	def test_spread_yield_by_contribution_months(self):
+		contributions = [
+			{'payment_date': '2016-07-27', 'amount': '25'},
+			{'payment_date': '2016-08-14', 'amount': '25'},
+			{'payment_date': '2016-08-20', 'amount': '25'},
+		]
+		rows = spread_yield_by_contribution_months(
+			Decimal('30'),
+			contributions,
+			load_pct=Decimal('8'),
+		)
+		self.assertEqual(len(rows), 2)
+		self.assertEqual(rows[0][0], date(2016, 7, 31))
+		self.assertEqual(rows[1][0], date(2016, 8, 31))
+		self.assertEqual(rows[0][1], Decimal('7.50'))
+		self.assertEqual(rows[1][1], Decimal('22.50'))
+		self.assertEqual(sum(amount for _, amount in rows), Decimal('30'))
+		self.assertGreater(rows[1][1], rows[0][1])
+
+	def test_import_priorlife_pipeline(self):
+		institution = FinancialInstitution.objects.get(slug='priorlife')
+		source = ImportSource.objects.get(code='priorlife-contributions')
+		source.config = {
+			'parser': 'priorlife-contributions',
+			'contract_date': '27.07.2016',
+			'contract_load_pct': '8',
+			'guaranteed_yield_pct': '6',
+			'accumulated_amount': '3684.14',
+			'accrued_yield': '1867.14',
+			'additional_accrued_yield': '0',
+			'premium_amount': '25',
+			'premium_schedule': 'monthly',
+			'insurance_type': 'life',
+		}
+		source.save(update_fields=['config', 'updated_at'])
+		upload = SimpleUploadedFile(
+			'Priorlife_1.pdf',
+			self._pdf_path('Priorlife_1.pdf').read_bytes(),
+			content_type='application/pdf',
+		)
+		job, created = process_uploaded_import(source, upload)
+		self.assertTrue(created)
+		self.assertEqual(job.status, ImportJob.Status.SAVED)
+		self.assertEqual(job.details['metadata']['parser_variant'], 'priorlife-contributions')
+
+		product = Product.objects.get(institution=institution, external_id='210004070')
+		self.assertEqual(product.product_type, Product.ProductType.LIFE_INSURANCE)
+		self.assertEqual(str(product.current_price), '3684.14000000')
+		self.assertEqual(product.metadata['guaranteed_yield_pct'], '6')
+		self.assertEqual(product.metadata['accrued_yield_reported'], '1867.14')
+		self.assertEqual(product.metadata['accrued_yield_in_account'], '947.14')
+		self.assertEqual(product.metadata['net_contributions_total'], '2737.00')
+
+		contributions = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.DEPOSIT)
+		self.assertEqual(contributions.count(), 119)
+		income = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.INCOME)
+		self.assertEqual(income.count(), 98)
+		self.assertEqual(sum(tx.amount for tx in income), Decimal('947.14'))
+		self.assertFalse(income.filter(occurred_at__date=date(2026, 6, 5)).exists())
+		last_income = income.order_by('-occurred_at').first()
+		self.assertEqual(last_income.occurred_at.date(), date(2026, 5, 31))
+		self.assertTrue(last_income.metadata.get('spread_accrual'))
+
+		premium_account = Account.objects.get(institution__slug='income-sources', name='Страховые взносы')
+		self.assertEqual(contributions.filter(account=premium_account).count(), 119)
+		first_deposit = contributions.order_by('occurred_at').first()
+		self.assertEqual(str(first_deposit.metadata['net_amount']), '23.00')
+		self.assertEqual(str(first_deposit.metadata['load_amount']), '2.00')
+
+		snapshot = BalanceSnapshot.objects.get(product=product)
+		self.assertEqual(str(snapshot.balance), '3684.14000000')
 
 # Create your tests here.
