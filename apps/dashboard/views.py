@@ -1,3 +1,4 @@
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -7,13 +8,22 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
-from apps.common.services.exchange_rates import get_usd_conversion_rate
+from apps.common.services.exchange_rates import ensure_nbrb_rates_current, get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
 from apps.imports.models import ImportJob
 from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import build_product_groups, build_product_transaction_map
 from apps.products.models import Product
 from apps.products.operations_calendar import build_operations_calendar
+
+logger = logging.getLogger(__name__)
+
+
+def _refresh_nbrb_rates_if_stale(*, today: date | None = None) -> None:
+	try:
+		ensure_nbrb_rates_current(today=today)
+	except Exception:
+		logger.exception('Failed to refresh NBRB exchange rates')
 
 
 PORTFOLIO_CHART_RANGES = {
@@ -272,6 +282,7 @@ def _historical_portfolio_context(as_of_date):
 
 def dashboard_home(request):
     as_of_date = timezone.localdate()
+    _refresh_nbrb_rates_if_stale(today=as_of_date)
     historical_report = _historical_portfolio_context(as_of_date)
     products = list(Product.objects.select_related('institution', 'currency').filter(is_active=True).order_by('institution__name', 'currency__code', 'name'))
     product_transaction_map = build_product_transaction_map([product.id for product in products])
@@ -319,6 +330,7 @@ def dashboard_recent_imports(request):
 
 
 def dashboard_latest_rates(request):
+    _refresh_nbrb_rates_if_stale()
     return render(
         request,
         'dashboard/partials/latest_rates.html',
@@ -327,6 +339,7 @@ def dashboard_latest_rates(request):
 
 
 def exchange_rate_history(request):
+    _refresh_nbrb_rates_if_stale()
     period = request.GET.get('period', '90d')
     period_map = {
         '30d': 30,

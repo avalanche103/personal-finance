@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
@@ -103,6 +104,24 @@ def recalculate_usd_valuations() -> dict:
 		updated['products'] += 1
 
 	return updated
+
+
+def latest_tracked_nbrb_rate_date() -> date | None:
+	return ExchangeRateHistory.objects.filter(
+		currency__code__in=TRACKED_CURRENCIES,
+		source=ExchangeRateHistory.Source.NBRB,
+	).aggregate(latest=Max('rate_date'))['latest']
+
+
+def ensure_nbrb_rates_current(*, today: date | None = None) -> dict | None:
+	"""Pull NBRB rates when local history is behind today."""
+	reference = today or timezone.localdate()
+	latest = latest_tracked_nbrb_rate_date()
+	if latest is not None and latest >= reference:
+		return None
+
+	start_date = latest if latest is not None else reference - timedelta(days=30)
+	return sync_nbrb_rate_history(start_date=start_date, end_date=reference)
 
 
 def sync_nbrb_rate_history(start_date: date, end_date: date | None = None) -> dict:
