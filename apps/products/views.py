@@ -1,3 +1,4 @@
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from django.contrib import messages
@@ -206,7 +207,19 @@ def _build_product_detail_context(product: Product) -> dict:
         all_transactions,
         position_summary,
         as_of_date=timezone.localdate(),
+        product_type=product.product_type,
     )
+
+    pension_summary = None
+    if product.product_type == Product.ProductType.PENSION:
+        metadata = product.metadata if isinstance(product.metadata, dict) else {}
+        pension_summary = {
+            'own_contributions_byn': position_summary['purchase_cost'],
+            'employer_subsidy_byn': position_summary.get('employer_subsidy', Decimal('0')),
+            'total_contributions_byn': position_summary['purchase_cost'] + position_summary.get('employer_subsidy', Decimal('0')),
+            'management_expense_pct': metadata.get('management_expense_pct'),
+            'insurance_sum_byn': metadata.get('insurance_sum_byn'),
+        }
 
     return {
         'product': product,
@@ -216,6 +229,7 @@ def _build_product_detail_context(product: Product) -> dict:
         'product_metadata': product.metadata.items() if isinstance(product.metadata, dict) else [],
         'position_summary': position_summary,
         'performance_summary': performance_summary,
+        'pension_summary': pension_summary,
     }
 
 

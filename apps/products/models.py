@@ -13,6 +13,7 @@ class Product(TimeStampedModel):
 		CFD = 'cfd', 'CFD'
 		DEPOSIT = 'deposit', 'Deposit'
 		ETF = 'etf', 'ETF'
+		PENSION = 'pension', 'Pension'
 		OTHER = 'other', 'Other'
 
 	class IncomeSchedule(models.TextChoices):
@@ -81,6 +82,20 @@ class Product(TimeStampedModel):
 		if isinstance(self.metadata, dict):
 			kind = str(self.metadata.get('bond_kind', '')).strip()
 		return labels.get(kind, '')
+
+	@property
+	def is_pension_product(self) -> bool:
+		return self.product_type == self.ProductType.PENSION
+
+	@property
+	def pension_program_display(self) -> str:
+		if not self.is_pension_product:
+			return ''
+		if isinstance(self.metadata, dict):
+			program = str(self.metadata.get('program', '')).strip()
+			if program == 'dnps_state':
+				return 'ДНПС с участием государства'
+		return 'Pension'
 
 	@property
 	def finstore_token_id(self) -> str:

@@ -59,14 +59,26 @@
                 <span>Transactions</span>
                 <strong>{{ transaction_count }}</strong>
             </div>
-            <div class="info-card">
-                <span>Open units</span>
-                <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
-            </div>
-            <div class="info-card">
-                <span>Average entry price</span>
-                <strong>{{ position_summary.avg_entry_price|floatformat:2 }} {{ product.currency.code }}</strong>
-            </div>
+            {% if product.product_type != 'pension' %}
+                <div class="info-card">
+                    <span>Open units</span>
+                    <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
+                </div>
+                <div class="info-card">
+                    <span>Average entry price</span>
+                    <strong>{{ position_summary.avg_entry_price|floatformat:2 }} {{ product.currency.code }}</strong>
+                </div>
+            {% endif %}
+            {% if product.product_type == 'pension' and pension_summary %}
+                <div class="info-card">
+                    <span>Own contributions</span>
+                    <strong>{{ pension_summary.own_contributions_byn|floatformat:2 }} BYN</strong>
+                </div>
+                <div class="info-card">
+                    <span>Employer subsidy</span>
+                    <strong>{{ pension_summary.employer_subsidy_byn|floatformat:2 }} BYN</strong>
+                </div>
+            {% endif %}
             <div class="info-card">
                 <span>Unrealized P&amp;L</span>
                 <strong>{{ position_summary.unrealized_pnl_usd|floatformat:2 }} USD</strong>
@@ -128,11 +140,23 @@
         <section class="panel stack-md">
             <div>
                 <p class="eyebrow">Issue terms</p>
-                <h2>{% if product.product_type == 'bond' %}Bond terms{% else %}Token terms{% endif %}</h2>
-                <p class="muted">Rate, maturity, and income schedule for this product.</p>
+                {% if product.product_type == 'pension' %}
+                    <h2>Pension terms</h2>
+                    <p class="muted">DNPS contract details and accumulated balance from Stravita statement.</p>
+                {% elif product.product_type == 'bond' %}
+                    <h2>Bond terms</h2>
+                    <p class="muted">Rate, maturity, and income schedule for this product.</p>
+                {% else %}
+                    <h2>Token terms</h2>
+                    <p class="muted">Rate, maturity, and income schedule for this product.</p>
+                {% endif %}
             </div>
 
-            {% include 'products/partials/token_terms_form.html' %}
+            {% if product.product_type == 'pension' %}
+                {% include 'products/partials/pension_terms.html' %}
+            {% else %}
+                {% include 'products/partials/token_terms_form.html' %}
+            {% endif %}
         </section>
     </div>
 

@@ -41,6 +41,14 @@ def build_product_transaction_map(product_ids: list[int]) -> dict[int, list[Tran
     return transaction_map
 
 
+def _to_decimal(value) -> Decimal:
+	if value in (None, ''):
+		return Decimal('0')
+	if isinstance(value, Decimal):
+		return value
+	return Decimal(str(value).strip().replace(',', '.'))
+
+
 def _resolve_amount_usd(transaction: Transaction) -> Decimal:
     amount = transaction.amount or Decimal('0')
     amount_usd = transaction.amount_usd or Decimal('0')
@@ -91,6 +99,20 @@ def build_product_position_summary(
         quantity = transaction.quantity or Decimal('0')
         amount = transaction.amount or Decimal('0')
         amount_usd = _resolve_amount_usd(transaction)
+        if (
+            product_type == Product.ProductType.PENSION
+            and transaction.transaction_type == Transaction.TransactionType.DEPOSIT
+        ):
+            metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+            employee_share = metadata.get('employee_share_byn')
+            employer_share = metadata.get('employer_share_byn')
+            employee_amount = _to_decimal(employee_share) if employee_share not in (None, '') else abs(amount) / Decimal('2')
+            employer_amount = _to_decimal(employer_share) if employer_share not in (None, '') else abs(amount) / Decimal('2')
+            employee_amount_usd = employee_amount * (abs(amount_usd) / abs(amount)) if amount else Decimal('0')
+            bought_units += abs(amount)
+            purchase_cost += employee_amount
+            purchase_cost_usd += employee_amount_usd
+            continue
         if quantity > 0:
             bought_units += quantity
             purchase_cost += abs(amount)
@@ -112,12 +134,28 @@ def build_product_position_summary(
     open_cost_basis_usd = purchase_cost_usd / bought_units * open_units if bought_units else Decimal('0')
     market_value_usd = market_value_usd if market_value_usd is not None else Decimal('0')
 
+    employer_subsidy = Decimal('0')
+    employer_subsidy_usd = Decimal('0')
+    if product_type == Product.ProductType.PENSION:
+        for tx in transactions:
+            if tx.transaction_type != Transaction.TransactionType.DEPOSIT:
+                continue
+            metadata = tx.metadata if isinstance(tx.metadata, dict) else {}
+            employer_share = metadata.get('employer_share_byn')
+            employer_amount = _to_decimal(employer_share) if employer_share not in (None, '') else (tx.amount or Decimal('0')) / Decimal('2')
+            employer_subsidy += employer_amount
+            amount = tx.amount or Decimal('0')
+            amount_usd = _resolve_amount_usd(tx)
+            employer_subsidy_usd += employer_amount * (abs(amount_usd) / abs(amount)) if amount else Decimal('0')
+
     return {
         'bought_units': bought_units,
         'redeemed_units': redeemed_units,
         'open_units': open_units,
         'purchase_cost': purchase_cost,
         'purchase_cost_usd': purchase_cost_usd,
+        'employer_subsidy': employer_subsidy,
+        'employer_subsidy_usd': employer_subsidy_usd,
         'returned_cash': returned_cash,
         'returned_cash_usd': returned_cash_usd,
         'passive_income': passive_income,
@@ -179,7 +217,49 @@ def calculate_xirr(cash_flows: list[tuple[date, Decimal]]) -> Decimal | None:
     return result if isfinite(float(result)) else None
 
 
-def build_product_performance_summary(transactions, position_summary, as_of_date: date | None = None):
+def _employee_contribution_usd(transaction: Transaction) -> Decimal:
+    amount = transaction.amount or Decimal('0')
+    amount_usd = _resolve_amount_usd(transaction)
+    metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+    employee_share = metadata.get('employee_share_byn')
+    employee_amount = _to_decimal(employee_share) if employee_share not in (None, '') else abs(amount) / Decimal('2')
+    if not amount:
+        return Decimal('0')
+    return employee_amount * (abs(amount_usd) / abs(amount))
+
+
+def build_performance_cash_flows(
+    transactions,
+    *,
+    product_type: str | None = None,
+    market_value_usd: Decimal,
+    as_of_date: date | None = None,
+) -> list[tuple[date, Decimal]]:
+    if product_type == Product.ProductType.PENSION:
+        cash_flows = [
+            (tx.occurred_at.date(), -_employee_contribution_usd(tx))
+            for tx in transactions
+            if tx.transaction_type == Transaction.TransactionType.DEPOSIT and (tx.amount or tx.amount_usd)
+        ]
+    else:
+        cash_flows = [
+            (tx.occurred_at.date(), _resolve_amount_usd(tx))
+            for tx in transactions
+            if tx.amount or tx.amount_usd
+        ]
+
+    if market_value_usd > 0 and as_of_date is not None:
+        cash_flows.append((as_of_date, market_value_usd))
+    return cash_flows
+
+
+def build_product_performance_summary(
+    transactions,
+    position_summary,
+    as_of_date: date | None = None,
+    *,
+    product_type: str | None = None,
+):
     purchase_cost_usd = position_summary['purchase_cost_usd']
     market_value_usd = _resolve_market_value_usd(position_summary)
     total_return_value = (
@@ -189,13 +269,12 @@ def build_product_performance_summary(transactions, position_summary, as_of_date
         - purchase_cost_usd
     )
     total_return_pct = (total_return_value / purchase_cost_usd * Decimal('100')) if purchase_cost_usd else None
-    cash_flows = [
-        (tx.occurred_at.date(), _resolve_amount_usd(tx))
-        for tx in transactions
-        if tx.amount or tx.amount_usd
-    ]
-    if market_value_usd > 0 and as_of_date is not None:
-        cash_flows.append((as_of_date, market_value_usd))
+    cash_flows = build_performance_cash_flows(
+        transactions,
+        product_type=product_type,
+        market_value_usd=market_value_usd,
+        as_of_date=as_of_date,
+    )
     xirr = calculate_xirr(cash_flows)
     return {
         'total_return_value': total_return_value,
@@ -256,7 +335,12 @@ def build_product_groups(
             currency=product.currency,
             product_type=product.product_type,
         )
-        performance_summary = build_product_performance_summary(product_transactions, position_summary, as_of_date=as_of_date)
+        performance_summary = build_product_performance_summary(
+            product_transactions,
+            position_summary,
+            as_of_date=as_of_date,
+            product_type=product.product_type,
+        )
 
         if group_key not in grouped:
             grouped[group_key] = {
@@ -283,9 +367,12 @@ def build_product_groups(
         grouped[group_key]['passive_income'] += position_summary['passive_income']
         grouped[group_key]['total_return_value'] += performance_summary['total_return_value']
         grouped[group_key]['cash_flows'].extend(
-            (transaction.occurred_at.date(), _resolve_amount_usd(transaction))
-            for transaction in product_transactions
-            if transaction.amount or transaction.amount_usd
+            build_performance_cash_flows(
+                product_transactions,
+                product_type=product.product_type,
+                market_value_usd=Decimal('0'),
+                as_of_date=None,
+            )
         )
 
     for group in grouped.values():
@@ -312,6 +399,8 @@ def normalize_issuer_label(issuer: str) -> str:
     lowered = normalized.casefold()
     if 'aigenis' in lowered or 'айгенис' in lowered:
         return 'Aigenis'
+    if 'stravita' in lowered or 'стравита' in lowered:
+        return 'Стравита'
     return normalized
 
 
@@ -320,6 +409,14 @@ def extract_product_issuer(product) -> str:
     issuer = str(metadata.get('issuer', '') or '').strip()
     if issuer:
         return normalize_issuer_label(issuer)
+
+    if product.product_type == Product.ProductType.PENSION:
+        institution_slug = getattr(product.institution, 'slug', '')
+        if institution_slug == 'stravita':
+            return 'Стравита'
+        institution_name = str(getattr(product.institution, 'name', '') or '').strip()
+        if institution_name:
+            return normalize_issuer_label(institution_name)
 
     if product.product_type == Product.ProductType.BOND:
         institution_slug = getattr(product.institution, 'slug', '')
@@ -390,7 +487,11 @@ def build_portfolio_allocation(products, *, instrument_type: str | None = None) 
         total_usd += value_usd
         by_institution[product.institution.name] += value_usd
         by_group[product_group_label(*product_group_key(product))] += value_usd
-        if product.product_type in (Product.ProductType.TOKEN, Product.ProductType.BOND):
+        if product.product_type in (
+            Product.ProductType.TOKEN,
+            Product.ProductType.BOND,
+            Product.ProductType.PENSION,
+        ):
             by_issuer[extract_product_issuer(product)] += value_usd
 
     instrument_label = ''

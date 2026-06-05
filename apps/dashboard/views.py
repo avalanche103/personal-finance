@@ -217,15 +217,24 @@ def _account_value_as_of(account: Account, as_of_date, rate_cache: dict) -> Deci
     return balance * rate
 
 
+def _product_market_value_native(product: Product, *, units: Decimal) -> Decimal:
+    if product.product_type == Product.ProductType.PENSION:
+        return units
+    return units * (product.current_price or Decimal('0'))
+
+
 def _product_value_as_of(product: Product, as_of_date, rate_cache: dict) -> Decimal:
     snapshot = (
         product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
         .order_by('-captured_at', '-id')
         .first()
     )
-    units = snapshot.balance if snapshot else product.units
+    if snapshot:
+        units = snapshot.balance
+    else:
+        units = product.units or Decimal('0')
     rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
-    return units * product.current_price * rate
+    return _product_market_value_native(product, units=units) * rate
 
 
 def _historical_portfolio_context(as_of_date):

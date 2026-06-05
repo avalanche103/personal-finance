@@ -156,6 +156,38 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Last day of previous month')
 		self.assertContains(response, 'Last day of previous year')
 
+	def test_historical_portfolio_treats_pension_snapshot_as_total_value(self):
+		byn = Currency.objects.get(code='BYN')
+		institution = FinancialInstitution.objects.create(
+			name='Pension Snapshot Test Insurer',
+			slug='pension-snapshot-test-insurer',
+			institution_type=FinancialInstitution.InstitutionType.INSURANCE,
+			base_currency=byn,
+		)
+		product = Product.objects.create(
+			institution=institution,
+			name='DNPS',
+			product_type=Product.ProductType.PENSION,
+			currency=byn,
+			units=Decimal('1'),
+			current_price=Decimal('4815.42'),
+			current_value_usd=Decimal('1705.78'),
+			external_id='TEST-PENSION-SNAPSHOT',
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=product,
+			currency=byn,
+			balance=Decimal('4815.42'),
+			balance_usd=Decimal('1705.78'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 5, 1, 12, 0)),
+		)
+
+		response = self.client.get('/portfolio-report/?as_of=2026-06-05')
+		self.assertEqual(response.status_code, 200)
+		self.assertLess(response.context['portfolio_usd'], Decimal('10000'))
+		self.assertLess(response.context['products_total_usd'], Decimal('5000'))
+
 	def test_dashboard_group_shows_xirr_for_custom_product_group(self):
 		usd = Currency.objects.get(code='USD')
 		institution = FinancialInstitution.objects.create(

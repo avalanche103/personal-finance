@@ -80,6 +80,27 @@ class Command(BaseCommand):
 				'metadata': {'bootstrap': True},
 			},
 		)
+		stravita, _ = FinancialInstitution.objects.update_or_create(
+			slug='stravita',
+			defaults={
+				'name': 'Стравита',
+				'institution_type': FinancialInstitution.InstitutionType.INSURANCE,
+				'country': 'BY',
+				'website': 'https://stravita.by/',
+				'base_currency': byn,
+				'metadata': {'bootstrap': True},
+			},
+		)
+		income_sources, _ = FinancialInstitution.objects.update_or_create(
+			slug='income-sources',
+			defaults={
+				'name': 'Доходы',
+				'institution_type': FinancialInstitution.InstitutionType.OTHER,
+				'country': 'BY',
+				'base_currency': byn,
+				'metadata': {'bootstrap': True, 'purpose': 'payroll_source'},
+			},
+		)
 
 		ImportSource.objects.update_or_create(
 			code='nbrb-exrates-api',
@@ -112,6 +133,26 @@ class Command(BaseCommand):
 				'config': {'parser': 'aigenis-report', 'bootstrap': True},
 			},
 		)
+		ImportSource.objects.update_or_create(
+			code='stravita-extract',
+			defaults={
+				'institution': stravita,
+				'name': 'Stravita Pension Statement',
+				'source_type': ImportSource.SourceType.PDF,
+				'is_active': True,
+				'config': {'parser': 'stravita-extract', 'management_expense_pct': '5.7', 'bootstrap': True},
+			},
+		)
+		ImportSource.objects.update_or_create(
+			code='stravita-contributions',
+			defaults={
+				'institution': stravita,
+				'name': 'Stravita Pension Contributions',
+				'source_type': ImportSource.SourceType.PDF,
+				'is_active': True,
+				'config': {'parser': 'stravita-contributions', 'bootstrap': True},
+			},
+		)
 
 		Account.objects.get_or_create(
 			institution=aigenis,
@@ -122,6 +163,17 @@ class Command(BaseCommand):
 				'current_balance': Decimal('0.00'),
 				'current_balance_usd': Decimal('0.00'),
 				'metadata': {'bootstrap': True},
+			},
+		)
+		Account.objects.get_or_create(
+			institution=income_sources,
+			name='Зарплата',
+			defaults={
+				'account_type': Account.AccountType.OTHER,
+				'currency': byn,
+				'current_balance': Decimal('0.00'),
+				'current_balance_usd': Decimal('0.00'),
+				'metadata': {'bootstrap': True, 'purpose': 'payroll'},
 			},
 		)
 		Account.objects.get_or_create(

@@ -214,7 +214,7 @@
             <article class="metric-card metric-card--accent">
                 <span>Portfolio</span>
                 <strong class="metric-value font-mono">${{ historical_reporting.portfolio_usd|floatformat:2 }}</strong>
-                <small>Snapshot date</small>
+                <small>As of {{ historical_reporting.as_of_date|display_date }}</small>
             </article>
             <article class="metric-card metric-card--neutral">
                 <span>Accounts</span>

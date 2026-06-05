@@ -1,14 +1,19 @@
+from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.accounts.models import Account, Transaction
+from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
+from apps.common.services.stravita_pension import parse_stravita_contributions, parse_stravita_extract
 from apps.imports.models import ImportJob, ImportSource
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
+from apps.institutions.models import FinancialInstitution
 from apps.products.models import Product
 
 
@@ -318,5 +323,86 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(str(product.current_price), '10.00000000')
 		self.assertGreater(product.current_value_usd, 0)
 		self.assertEqual(Transaction.objects.filter(import_job=job, product=product).count(), 1)
+
+class StravitaPensionImportTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def _pdf_path(self, filename: str) -> Path:
+		path = Path(settings.BASE_DIR) / filename
+		self.assertTrue(path.exists(), f'Missing fixture PDF: {path}')
+		return path
+
+	def test_parse_stravita_extract_pdf(self):
+		result = parse_stravita_extract(self._pdf_path('policy_pension_extract.pdf'))
+		self.assertEqual(result.metadata['parser_variant'], 'stravita-extract')
+		self.assertEqual(result.metadata['account_number'], '3040282A000PB5')
+		statement = result.artifacts['statement']
+		self.assertEqual(statement['certificate_series'], 'EP')
+		self.assertEqual(statement['certificate_number'], '0004390')
+		self.assertEqual(statement['as_of_date'], '2026-05-01')
+		self.assertEqual(statement['contributions_total_byn'], '4668.78')
+		self.assertEqual(statement['accumulated_amount_byn'], '4815.42')
+		self.assertEqual(statement['insurance_bonus_byn'], '46.03')
+		self.assertEqual(statement['refinancing_yield_byn'], '100.61')
+
+	def test_parse_stravita_contributions_pdf(self):
+		result = parse_stravita_contributions(self._pdf_path('policy_pension_contributions.pdf'))
+		self.assertEqual(result.metadata['parser_variant'], 'stravita-contributions')
+		self.assertEqual(result.metadata['rows'], 52)
+		self.assertEqual(result.metadata['account_number'], '3040282A000PB5')
+
+	def test_import_stravita_pension_pipeline(self):
+		institution = FinancialInstitution.objects.get(slug='stravita')
+		extract_source = ImportSource.objects.get(code='stravita-extract')
+		contributions_source = ImportSource.objects.get(code='stravita-contributions')
+
+		extract_upload = SimpleUploadedFile(
+			'policy_pension_extract.pdf',
+			self._pdf_path('policy_pension_extract.pdf').read_bytes(),
+			content_type='application/pdf',
+		)
+		contributions_upload = SimpleUploadedFile(
+			'policy_pension_contributions.pdf',
+			self._pdf_path('policy_pension_contributions.pdf').read_bytes(),
+			content_type='application/pdf',
+		)
+
+		extract_job, extract_created = process_uploaded_import(extract_source, extract_upload)
+		contributions_job, contributions_created = process_uploaded_import(contributions_source, contributions_upload)
+
+		self.assertTrue(extract_created)
+		self.assertTrue(contributions_created)
+		self.assertEqual(extract_job.status, ImportJob.Status.SAVED)
+		self.assertEqual(contributions_job.status, ImportJob.Status.SAVED)
+		self.assertEqual(extract_job.details['metadata']['parser_variant'], 'stravita-extract')
+		self.assertEqual(contributions_job.details['metadata']['parser_variant'], 'stravita-contributions')
+
+		product = Product.objects.get(institution=institution, external_id='3040282A000PB5')
+		self.assertEqual(product.product_type, Product.ProductType.PENSION)
+		self.assertEqual(str(product.current_price), '4815.42000000')
+		self.assertEqual(product.metadata['program'], 'dnps_state')
+		self.assertEqual(product.metadata['management_expense_pct'], '5.7')
+
+		contributions = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.DEPOSIT)
+		self.assertEqual(contributions.count(), 52)
+		income = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.INCOME)
+		self.assertEqual(income.count(), 2)
+
+		payroll_account = Account.objects.get(institution__slug='income-sources', name='Зарплата')
+		self.assertEqual(contributions.filter(account=payroll_account).count(), 52)
+
+		snapshot = BalanceSnapshot.objects.get(product=product)
+		self.assertEqual(str(snapshot.balance), '4815.42000000')
+
+		july_contribution = contributions.filter(occurred_at__date='2024-07-04', amount=Decimal('75.36')).first()
+		self.assertIsNotNone(july_contribution)
+		self.assertEqual(str(july_contribution.metadata['employee_share_byn']), '37.68')
+		self.assertEqual(str(july_contribution.metadata['employer_share_byn']), '37.68')
+
+		contributions_through_may = contributions.filter(occurred_at__date__lte='2026-05-01')
+		total_through_may = sum((tx.amount for tx in contributions_through_may), Decimal('0'))
+		self.assertEqual(str(total_through_may), '4668.78')
 
 # Create your tests here.

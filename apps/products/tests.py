@@ -400,6 +400,29 @@ class ProductViewsTests(TestCase):
 		issuers = {row['label']: row for row in allocation['by_issuer']}
 		self.assertEqual(issuers['Aigenis']['value_usd'], Decimal('526.17'))
 
+	def test_build_portfolio_allocation_includes_pension_issuer(self):
+		stravita = FinancialInstitution.objects.create(
+			name='Стравита',
+			slug='stravita',
+			institution_type=FinancialInstitution.InstitutionType.INSURANCE,
+		)
+		pension = Product.objects.create(
+			institution=stravita,
+			name='ДНПС EP-0004390',
+			external_id='3040282A000PB5',
+			product_type=Product.ProductType.PENSION,
+			currency=self.byn,
+			units=Decimal('1'),
+			current_price=Decimal('4815.42'),
+			current_value_usd=Decimal('1705.78'),
+		)
+
+		allocation = build_portfolio_allocation([pension])
+
+		self.assertEqual(extract_token_issuer(pension), 'Стравита')
+		issuers = {row['label']: row for row in allocation['by_issuer']}
+		self.assertEqual(issuers['Стравита']['value_usd'], Decimal('1705.78'))
+
 	def test_product_list_shows_assets_analysis(self):
 		response = self.client.get(reverse('products:list'))
 
@@ -627,3 +650,57 @@ class ProductPositionSummaryTests(TestCase):
 		self.assertEqual(summary['purchase_cost'], Decimal('1000'))
 		self.assertEqual(summary['purchase_cost_usd'], Decimal('1000'))
 		self.assertEqual(summary['avg_entry_price'], Decimal('100'))
+
+	def test_pension_xirr_uses_negative_employee_contributions(self):
+		account = Account.objects.create(
+			institution=FinancialInstitution.objects.create(name='Income', institution_type=FinancialInstitution.InstitutionType.OTHER),
+			name='Payroll',
+			currency=Currency.objects.create(code='BYN', name='Belarusian Ruble', symbol='Br', usd_rate=Decimal('0.31')),
+		)
+		product = Product.objects.create(
+			institution=FinancialInstitution.objects.create(name='Stravita', institution_type=FinancialInstitution.InstitutionType.INSURANCE),
+			name='DNPS',
+			product_type=Product.ProductType.PENSION,
+			currency=account.currency,
+			units=Decimal('1'),
+			current_price=Decimal('300'),
+			current_value_usd=Decimal('93'),
+		)
+		transactions = [
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				currency=account.currency,
+				amount=Decimal('200'),
+				amount_usd=Decimal('62'),
+				occurred_at=timezone.now() - timedelta(days=180),
+				metadata={'employee_share_byn': '100', 'employer_share_byn': '100'},
+			),
+			Transaction(
+				account=account,
+				product=product,
+				transaction_type=Transaction.TransactionType.INCOME,
+				currency=account.currency,
+				amount=Decimal('50'),
+				amount_usd=Decimal('15.5'),
+				occurred_at=timezone.now() - timedelta(days=1),
+				metadata={'income_kind': 'insurance_bonus'},
+			),
+		]
+		summary = build_product_position_summary(
+			transactions,
+			market_value=Decimal('300'),
+			market_value_usd=Decimal('93'),
+			product_type=Product.ProductType.PENSION,
+		)
+		performance = build_product_performance_summary(
+			transactions,
+			summary,
+			as_of_date=timezone.localdate(),
+			product_type=Product.ProductType.PENSION,
+		)
+
+		self.assertEqual(summary['purchase_cost'], Decimal('100'))
+		self.assertIsNotNone(performance['xirr'])
+		self.assertIsNotNone(performance['xirr_pct'])

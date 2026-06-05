@@ -1,0 +1,76 @@
+<div class="meta-list">
+    <div class="meta-item">
+        <strong>Program</strong>
+        <div class="muted">{{ product.pension_program_display|default:'Pension' }}</div>
+    </div>
+    {% if product.metadata.certificate_series and product.metadata.certificate_number %}
+        <div class="meta-item">
+            <strong>Certificate</strong>
+            <div class="muted">{{ product.metadata.certificate_series }}-{{ product.metadata.certificate_number }}{% if product.metadata.certificate_date %} · {{ product.metadata.certificate_date }}{% endif %}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.contract_start and product.metadata.contract_end %}
+        <div class="meta-item">
+            <strong>Contract period</strong>
+            <div class="muted">{{ product.metadata.contract_start }} — {{ product.metadata.contract_end }}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.total_tariff_pct %}
+        <div class="meta-item">
+            <strong>Tariff</strong>
+            <div class="muted">{{ product.metadata.total_tariff_pct }}% (employee {{ product.metadata.employee_tariff_pct }}% + employer {{ product.metadata.employer_tariff_pct }}%)</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.as_of_date %}
+        <div class="meta-item">
+            <strong>Statement date</strong>
+            <div class="muted">{{ product.metadata.as_of_date }}</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.accumulated_amount_byn %}
+        <div class="meta-item">
+            <strong>Accumulated balance</strong>
+            <div class="muted">{{ product.metadata.accumulated_amount_byn }} BYN</div>
+        </div>
+    {% endif %}
+    {% if pension_summary.own_contributions_byn %}
+        <div class="meta-item">
+            <strong>Own contributions</strong>
+            <div class="muted">{{ pension_summary.own_contributions_byn|floatformat:2 }} BYN</div>
+        </div>
+    {% endif %}
+    {% if pension_summary.employer_subsidy_byn %}
+        <div class="meta-item">
+            <strong>Employer subsidy</strong>
+            <div class="muted">{{ pension_summary.employer_subsidy_byn|floatformat:2 }} BYN</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.insurance_bonus_byn %}
+        <div class="meta-item">
+            <strong>Insurance bonus</strong>
+            <div class="muted">{{ product.metadata.insurance_bonus_byn }} BYN</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.refinancing_yield_byn %}
+        <div class="meta-item">
+            <strong>Refinancing yield</strong>
+            <div class="muted">{{ product.metadata.refinancing_yield_byn }} BYN</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.management_expense_pct %}
+        <div class="meta-item">
+            <strong>Management expense</strong>
+            <div class="muted">{{ product.metadata.management_expense_pct }}%</div>
+        </div>
+    {% endif %}
+    {% if product.metadata.insurance_sum_byn %}
+        <div class="meta-item">
+            <strong>Projected insurance sum</strong>
+            <div class="muted">{{ product.metadata.insurance_sum_byn }} BYN <span class="muted">(forecast, not current NAV)</span></div>
+        </div>
+    {% endif %}
+    <div class="meta-item">
+        <strong>Liquidity</strong>
+        <div class="muted">Locked until retirement</div>
+    </div>
+</div>
