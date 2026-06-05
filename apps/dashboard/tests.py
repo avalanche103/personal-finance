@@ -9,9 +9,11 @@ from apps.common.management.commands.bootstrap_local_data import Command as Boot
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
 from apps.dashboard.views import (
+	_dashboard_metrics,
 	_historical_portfolio_context,
 	_portfolio_chart_payload,
 	_portfolio_chart_points,
+	_product_value_as_of,
 )
 from apps.products.models import Product
 
@@ -189,8 +191,66 @@ class DashboardSmokeTests(TestCase):
 
 		response = self.client.get('/portfolio-report/?as_of=2026-06-05')
 		self.assertEqual(response.status_code, 200)
+		self.assertGreater(response.context['products_total_usd'], Decimal('1500'))
 		self.assertLess(response.context['portfolio_usd'], Decimal('10000'))
-		self.assertLess(response.context['products_total_usd'], Decimal('5000'))
+
+	def test_pension_value_after_snapshot_uses_statement_balance(self):
+		byn = Currency.objects.get(code='BYN')
+		institution = FinancialInstitution.objects.create(
+			name='Pension Snapshot After Test',
+			slug='pension-snapshot-after-test',
+			institution_type=FinancialInstitution.InstitutionType.INSURANCE,
+			base_currency=byn,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Premiums',
+			currency=byn,
+		)
+		product = Product.objects.create(
+			institution=institution,
+			name='DNPS after snapshot',
+			product_type=Product.ProductType.PENSION,
+			currency=byn,
+			units=Decimal('1'),
+			current_price=Decimal('4815.42'),
+			current_value_usd=Decimal('1705.78'),
+			external_id='TEST-PENSION-SNAPSHOT-AFTER',
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=byn,
+			amount=Decimal('100'),
+			import_fingerprint='test-pension-snapshot-after-deposit',
+			occurred_at=timezone.make_aware(timezone.datetime(2026, 4, 1, 12, 0)),
+			metadata={'employee_share_byn': '50'},
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=product,
+			currency=byn,
+			balance=Decimal('4815.42'),
+			balance_usd=Decimal('1705.78'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 5, 1, 12, 0)),
+		)
+
+		as_of = date(2026, 6, 1)
+		if as_of == timezone.localdate():
+			as_of = date(2026, 6, 2)
+		value_usd = _product_value_as_of(product, as_of, {})
+		from apps.common.services.exchange_rates import get_usd_conversion_rate
+
+		expected_usd = Decimal('4815.42') * get_usd_conversion_rate(byn, as_of, {})
+		self.assertEqual(value_usd, expected_usd)
+		self.assertGreater(value_usd, Decimal('100'))
+
+	def test_historical_portfolio_matches_hero_metrics_on_same_date(self):
+		as_of = timezone.localdate()
+		metrics = _dashboard_metrics()
+		historical = _historical_portfolio_context(as_of)
+		self.assertLess(abs(metrics['portfolio_usd'] - historical['portfolio_usd']), Decimal('1'))
 
 	def test_historical_portfolio_reconstructs_life_insurance_from_transactions(self):
 		usd = Currency.objects.get(code='USD')
@@ -221,6 +281,7 @@ class DashboardSmokeTests(TestCase):
 			transaction_type=Transaction.TransactionType.DEPOSIT,
 			currency=usd,
 			amount=Decimal('25'),
+			import_fingerprint='test-priorlife-chart-deposit',
 			occurred_at=timezone.make_aware(timezone.datetime(2016, 7, 27, 12, 0)),
 			metadata={'net_amount': '23.00'},
 		)
@@ -230,6 +291,7 @@ class DashboardSmokeTests(TestCase):
 			transaction_type=Transaction.TransactionType.INCOME,
 			currency=usd,
 			amount=Decimal('5'),
+			import_fingerprint='test-priorlife-chart-income',
 			occurred_at=timezone.make_aware(timezone.datetime(2016, 7, 31, 12, 0)),
 		)
 		BalanceSnapshot.objects.create(

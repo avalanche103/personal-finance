@@ -210,7 +210,13 @@ def _build_portfolio_period_comparisons(as_of_date: date, current: dict) -> list
     return comparisons
 
 
+def _is_current_portfolio_date(as_of_date) -> bool:
+    return as_of_date == timezone.localdate()
+
+
 def _account_value_as_of(account: Account, as_of_date, rate_cache: dict) -> Decimal:
+    if _is_current_portfolio_date(as_of_date):
+        return account.current_balance_usd or Decimal('0')
     snapshot = (
         account.balance_snapshots.filter(captured_at__date__lte=as_of_date)
         .order_by('-captured_at', '-id')
@@ -234,6 +240,8 @@ def _product_value_as_of(
     *,
     transaction_map: dict[int, list[Transaction]] | None = None,
 ) -> Decimal:
+    if _is_current_portfolio_date(as_of_date):
+        return product.current_value_usd or Decimal('0')
     rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
     if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
         snapshot = (
@@ -242,15 +250,14 @@ def _product_value_as_of(
             .first()
         )
         transactions = (transaction_map or {}).get(product.id, [])
-        native_value = reconstruct_insurance_product_value_native(
-            transactions,
-            as_of_date,
-            product_type=product.product_type,
-        )
-        if snapshot and snapshot.captured_at.date() <= as_of_date:
-            snapshot_date = snapshot.captured_at.date()
-            if native_value == 0 or as_of_date == snapshot_date:
-                native_value = snapshot.balance
+        if snapshot:
+            native_value = snapshot.balance
+        else:
+            native_value = reconstruct_insurance_product_value_native(
+                transactions,
+                as_of_date,
+                product_type=product.product_type,
+            )
         return native_value * rate
 
     snapshot = (
