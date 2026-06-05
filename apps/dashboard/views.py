@@ -8,6 +8,7 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
+from apps.accounts.querysets import visible_account_queryset
 from apps.common.dates import format_display_date
 from apps.common.services.exchange_rates import ensure_nbrb_rates_current, get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
@@ -342,7 +343,7 @@ def dashboard_home(request):
         'metrics': metrics,
         **_portfolio_chart_context(request.GET.get('range'), request.GET.get('mode'), as_of_date),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
-        'accounts': Account.objects.select_related('institution', 'currency').order_by('name')[:8],
+        'accounts': visible_account_queryset().order_by('name')[:8],
         'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=as_of_date),
         'recent_imports': ImportJob.objects.select_related('source').order_by('-created_at')[:5],
         'recent_transactions': Transaction.objects.select_related('account', 'currency', 'product').order_by('-occurred_at')[:12],

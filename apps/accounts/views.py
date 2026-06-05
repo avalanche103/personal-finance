@@ -2,12 +2,12 @@ from django.db.models import Q
 from django.shortcuts import render
 
 from apps.accounts.analytics import build_account_groups
-from apps.accounts.models import Account
+from apps.accounts.querysets import visible_account_queryset
 
 
 def account_list(request):
     query = request.GET.get('q', '').strip()
-    accounts = Account.objects.select_related('institution', 'currency')
+    accounts = visible_account_queryset()
     if query:
         accounts = accounts.filter(
             Q(name__icontains=query)

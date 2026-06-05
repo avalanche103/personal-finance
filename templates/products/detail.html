@@ -49,7 +49,7 @@
             </div>
             <div class="info-card">
                 <span>Units</span>
-                <strong>{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</strong>
+                <strong>{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ product.units|floatformat:6 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</strong>
             </div>
             <div class="info-card">
                 <span>Current price</span>
@@ -62,7 +62,7 @@
             {% if product.product_type != 'pension' and product.product_type != 'life_insurance' %}
                 <div class="info-card">
                     <span>Open units</span>
-                    <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
+                    <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.open_units|floatformat:6 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
                 </div>
                 <div class="info-card">
                     <span>Average entry price</span>
@@ -139,8 +139,8 @@
                     <div class="meta-item"><strong>Face value (USD)</strong><div class="muted font-mono">{{ product.metadata.face_value_usd }} USD{% if product.metadata.face_value_byn %} · {{ product.metadata.face_value_byn }} BYN @ {{ product.metadata.placement_fx_rate }}{% endif %}</div></div>
                 {% endif %}
                 <div class="meta-item"><strong>Currency</strong><div class="muted">{{ product.currency.code }} · {{ product.currency.name }}</div></div>
-                <div class="meta-item"><strong>Bought units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
-                <div class="meta-item"><strong>Redeemed units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
+                <div class="meta-item"><strong>Bought units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.bought_units|floatformat:6 }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
+                <div class="meta-item"><strong>Redeemed units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.redeemed_units|floatformat:6 }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
                 <div class="meta-item"><strong>Symbol</strong><div class="muted">{{ product.symbol|default:'-' }}</div></div>
                 <div class="meta-item"><strong>ISIN</strong><div class="muted">{{ product.isin|default:'-' }}</div></div>
                 <div class="meta-item"><strong>External ID</strong><div class="muted">{{ product.external_id|default:'-' }}</div></div>

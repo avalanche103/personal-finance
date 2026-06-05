@@ -59,6 +59,31 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'BYN</div>')
 		self.assertContains(response, '$5,00')
 
+	def test_dashboard_balances_hide_zero_binance_accounts(self):
+		usd = Currency.objects.get(code='USD')
+		binance = FinancialInstitution.objects.get(slug='binance')
+		Account.objects.create(
+			institution=binance,
+			name='Binance Visible USD',
+			account_type=Account.AccountType.WALLET,
+			currency=usd,
+			current_balance=Decimal('10'),
+			current_balance_usd=Decimal('10'),
+		)
+		Account.objects.create(
+			institution=binance,
+			name='Binance Empty BTC',
+			account_type=Account.AccountType.WALLET,
+			currency=usd,
+			current_balance=Decimal('0'),
+			current_balance_usd=Decimal('0'),
+		)
+
+		response = self.client.get('/')
+
+		self.assertContains(response, 'Binance Visible USD')
+		self.assertNotContains(response, 'Binance Empty BTC')
+
 	def test_portfolio_chart_points_respect_range(self):
 		as_of = date(2026, 6, 4)
 		self.assertEqual(len(_portfolio_chart_points(as_of, 'week')), 7)

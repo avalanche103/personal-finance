@@ -51,6 +51,24 @@ class Command(BaseCommand):
 				'metadata': {'bootstrap': True},
 			},
 		)
+		for code, name, symbol, usd_rate in [
+			('USDT', 'Tether USD', 'USDT', Decimal('1')),
+			('USDC', 'USD Coin', 'USDC', Decimal('1')),
+			('FDUSD', 'First Digital USD', 'FDUSD', Decimal('1')),
+			('RWUSD', 'Real World USD', 'RWUSD', Decimal('1')),
+			('BTC', 'Bitcoin', 'BTC', Decimal('0')),
+			('ETH', 'Ethereum', 'ETH', Decimal('0')),
+			('BNB', 'BNB', 'BNB', Decimal('0')),
+		]:
+			Currency.objects.update_or_create(
+				code=code,
+				defaults={
+					'name': name,
+					'symbol': symbol,
+					'usd_rate': usd_rate,
+					'metadata': {'bootstrap': True, 'source': 'binance'},
+				},
+			)
 
 		finstore, _ = FinancialInstitution.objects.update_or_create(
 			slug='finstore',
@@ -101,6 +119,17 @@ class Command(BaseCommand):
 				'country': 'BY',
 				'base_currency': usd,
 				'metadata': {'bootstrap': True},
+			},
+		)
+		binance, _ = FinancialInstitution.objects.update_or_create(
+			slug='binance',
+			defaults={
+				'name': 'Binance',
+				'institution_type': FinancialInstitution.InstitutionType.CRYPTO_EXCHANGE,
+				'country': 'ZZ',
+				'website': 'https://www.binance.com/',
+				'base_currency': usd,
+				'metadata': {'bootstrap': True, 'integration': 'api'},
 			},
 		)
 		stravita, _ = FinancialInstitution.objects.update_or_create(
@@ -165,6 +194,20 @@ class Command(BaseCommand):
 				'source_type': ImportSource.SourceType.XLS,
 				'is_active': True,
 				'config': {'parser': 'aigenis-report', 'bootstrap': True},
+			},
+		)
+		ImportSource.objects.update_or_create(
+			code='binance-api',
+			defaults={
+				'institution': binance,
+				'name': 'Binance API',
+				'source_type': ImportSource.SourceType.API,
+				'is_active': True,
+				'config': {
+					'parser': 'binance-api',
+					'bootstrap': True,
+					'permissions': ['read-only'],
+				},
 			},
 		)
 		ImportSource.objects.update_or_create(

@@ -424,6 +424,55 @@ class ProductViewsTests(TestCase):
 		issuers = {row['label']: row for row in allocation['by_issuer']}
 		self.assertEqual(issuers['Стравита']['value_usd'], Decimal('1705.78'))
 
+	def test_build_portfolio_allocation_includes_crypto_issuers(self):
+		binance = FinancialInstitution.objects.create(
+			name='Binance',
+			slug='binance',
+			institution_type=FinancialInstitution.InstitutionType.CRYPTO_EXCHANGE,
+		)
+		ton_spot = Product.objects.create(
+			institution=binance,
+			name='Binance TON Spot',
+			symbol='TON',
+			external_id='binance:spot:TON',
+			product_type=Product.ProductType.CRYPTO,
+			currency=self.usd,
+			units=Decimal('0.122444'),
+			current_price=Decimal('1.50'),
+			current_value_usd=Decimal('0.18'),
+			metadata={'asset': 'TON'},
+		)
+		ton_locked = Product.objects.create(
+			institution=binance,
+			name='Binance TON Earn Locked',
+			symbol='TON',
+			external_id='binance:earn_locked:TON',
+			product_type=Product.ProductType.CRYPTO,
+			currency=self.usd,
+			units=Decimal('18.367029'),
+			current_price=Decimal('1.50'),
+			current_value_usd=Decimal('27.55'),
+			metadata={'asset': 'TON'},
+		)
+		btc = Product.objects.create(
+			institution=binance,
+			name='Binance BTC Spot',
+			symbol='BTC',
+			external_id='binance:spot:BTC',
+			product_type=Product.ProductType.CRYPTO,
+			currency=self.usd,
+			units=Decimal('0.01'),
+			current_price=Decimal('60000'),
+			current_value_usd=Decimal('600'),
+			metadata={'asset': 'BTC'},
+		)
+
+		allocation = build_portfolio_allocation([ton_spot, ton_locked, btc])
+
+		issuers = {row['label']: row for row in allocation['by_issuer']}
+		self.assertEqual(issuers['TON']['value_usd'], Decimal('27.73'))
+		self.assertEqual(issuers['BTC']['value_usd'], Decimal('600'))
+
 	def test_product_list_shows_assets_analysis(self):
 		response = self.client.get(reverse('products:list'))
 

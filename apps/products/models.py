@@ -38,7 +38,7 @@ class Product(TimeStampedModel):
 	isin = models.CharField(max_length=32, blank=True)
 	product_type = models.CharField(max_length=32, choices=ProductType.choices, default=ProductType.OTHER)
 	currency = models.ForeignKey('common.Currency', on_delete=models.PROTECT, related_name='products')
-	units = models.DecimalField(max_digits=20, decimal_places=8, default=0)
+	units = models.DecimalField(max_digits=20, decimal_places=6, default=0)
 	current_price = models.DecimalField(max_digits=20, decimal_places=8, default=0)
 	current_value_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0)
 	external_id = models.CharField(max_length=128, blank=True)

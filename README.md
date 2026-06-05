@@ -142,6 +142,34 @@ python manage.py recalculate_usd_values
 - Пересчитываются поля `Account.current_balance_usd`, `Transaction.amount_usd`, `BalanceSnapshot.balance_usd` и `Product.current_value_usd`.
 - При синхронизации НБ РБ пересчет вызывается автоматически после сохранения новых курсов.
 
+## Binance
+
+Интеграция Binance использует только read-only API key из `.env`; ключ с правом withdrawal не нужен и не должен использоваться:
+
+```env
+BINANCE_API_KEY=your_read_only_key
+BINANCE_API_SECRET=your_read_only_secret
+BINANCE_API_BASE_URL=https://api.binance.com
+```
+
+Базовый запуск синхронизирует текущие Spot-балансы и USD-оценку:
+
+```bash
+python manage.py sync_binance --spot --snapshots
+```
+
+История Spot-сделок импортируется по явному списку пар, чтобы не обходить весь рынок:
+
+```bash
+python manage.py sync_binance --history --symbols BTCUSDT,ETHUSDT --start-date 2026-01-01
+python manage.py sync_binance --transfers --start-date 2026-01-01
+python manage.py sync_binance --earn --funding
+python manage.py sync_binance --spot --dry-run
+python manage.py sync_binance --spot --snapshots --skip-missing-credentials
+```
+
+Spot snapshot является источником текущих балансов, а импортированные сделки/комиссии помечаются как `exclude_from_account_balance`, чтобы не удваивать портфель в dashboard.
+
 ## Страница истории курсов
 
 - UI страница доступна по адресу `/exchange-rates/`.
@@ -158,12 +186,12 @@ python manage.py recalculate_usd_values
 - На главной странице добавлен блок последних курсов `USD`, `EUR`, `RUB`.
 - Для каждой валюты показывается последний курс НБ РБ в BYN и изменение к предыдущему дню.
 
-## Ежедневное обновление локально
+## Регулярное обновление локально
 
-- PowerShell script для ежедневной синхронизации: `scripts/sync_daily_finance.ps1`.
+- PowerShell script для регулярной синхронизации: `scripts/sync_daily_finance.ps1`.
 - CMD-обертка для Планировщика Windows: `scripts/sync_daily_finance.cmd`.
 - Скрипт регистрации задачи: `scripts/register_daily_finance_task.ps1`.
-- Ежедневный запуск подтягивает последние 7 дней курсов и затем делает пересчет USD-полей.
+- Запуск каждые 8 часов подтягивает последние 7 дней курсов, обновляет Binance Spot/Earn/Funding и затем делает пересчет USD-полей.
 - Пример регистрации в Планировщике Windows:
 
 ```powershell

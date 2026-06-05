@@ -10,7 +10,7 @@ class TimeStampedModel(models.Model):
 
 
 class Currency(TimeStampedModel):
-	code = models.CharField(max_length=3, unique=True)
+	code = models.CharField(max_length=16, unique=True)
 	name = models.CharField(max_length=64)
 	symbol = models.CharField(max_length=8, blank=True)
 	usd_rate = models.DecimalField(max_digits=18, decimal_places=6, default=1)

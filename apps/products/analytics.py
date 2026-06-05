@@ -471,6 +471,11 @@ def extract_product_issuer(product) -> str:
         if institution_name:
             return normalize_issuer_label(institution_name)
 
+    if product.product_type == Product.ProductType.CRYPTO:
+        asset = str(metadata.get('asset', '') or product.symbol or product.name or '').strip()
+        if asset:
+            return asset.upper()
+
     if product.product_type == Product.ProductType.BOND:
         institution_slug = getattr(product.institution, 'slug', '')
         if institution_slug == 'aigenis':
@@ -543,6 +548,7 @@ def build_portfolio_allocation(products, *, instrument_type: str | None = None) 
         if product.product_type in (
             Product.ProductType.TOKEN,
             Product.ProductType.BOND,
+            Product.ProductType.CRYPTO,
             Product.ProductType.PENSION,
             Product.ProductType.LIFE_INSURANCE,
         ):

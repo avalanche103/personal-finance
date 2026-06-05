@@ -86,11 +86,11 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(products.count(), 2)
 		self.assertEqual(products[0].product_type, Product.ProductType.TOKEN)
 		self.assertEqual(products[0].currency.code, 'BYN')
-		self.assertEqual(str(products[0].units), '2.00000000')
+		self.assertEqual(str(products[0].units), '2.000000')
 		self.assertEqual(str(products[0].current_price), '20.00000000')
 		self.assertGreater(products[0].current_value_usd, 0)
 		self.assertEqual(products[1].currency.code, 'USD')
-		self.assertEqual(str(products[1].units), '1.00000000')
+		self.assertEqual(str(products[1].units), '1.000000')
 		self.assertEqual(str(products[1].current_price), '10.00000000')
 		self.assertEqual(str(products[1].current_value_usd), '10.00')
 		self.assertEqual(job.details['metadata']['parser_variant'], 'finstore-history')
@@ -150,7 +150,7 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(job.status, ImportJob.Status.SAVED)
 
 		product = Product.objects.get(institution=source.institution, external_id='EXIT_(USD_999)')
-		self.assertEqual(str(product.units), '0E-8')
+		self.assertEqual(str(product.units), '0.000000')
 		self.assertFalse(product.is_active)
 		self.assertEqual(str(product.current_value_usd), '0.00')
 
@@ -159,10 +159,10 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertIsNone(transactions[0].product)
 		self.assertEqual(transactions[1].product, product)
 		self.assertEqual(transactions[1].transaction_type, Transaction.TransactionType.TRADE)
-		self.assertEqual(str(transactions[1].quantity), '2.00000000')
+		self.assertEqual(str(transactions[1].quantity), '2.000000')
 		self.assertEqual(transactions[2].product, product)
 		self.assertEqual(transactions[2].transaction_type, Transaction.TransactionType.INCOME)
-		self.assertEqual(str(transactions[2].quantity), '-2.00000000')
+		self.assertEqual(str(transactions[2].quantity), '-2.000000')
 
 		usd_account = Account.objects.get(institution=source.institution, currency__code='USD')
 		self.assertEqual(str(usd_account.current_balance), '110.00')
@@ -195,7 +195,7 @@ class ImportPipelineSmokeTests(TestCase):
 
 		products = Product.objects.filter(institution=source.institution, external_id__in=['POLESIE_(USD_676)', 'POLESIE_(USD_626)', 'SMART_(BYN_804)']).order_by('external_id')
 		self.assertEqual(products.count(), 3)
-		self.assertTrue(all(str(product.units) == '0E-8' for product in products))
+		self.assertTrue(all(str(product.units) == '0.000000' for product in products))
 
 	def test_import_upload_view_accepts_finstore_clipboard_text(self):
 		source = ImportSource.objects.get(code='finstore-history')
@@ -282,7 +282,7 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(product.product_type, Product.ProductType.BOND)
 		self.assertEqual(product.name, 'Айгенис Оп47')
 		self.assertEqual(op51.name, 'Айгенис Оп51')
-		self.assertEqual(str(product.units), '2.00000000')
+		self.assertEqual(str(product.units), '2.000000')
 		self.assertEqual(str(product.current_price), '525.70000000')
 
 		transactions = Transaction.objects.filter(import_job=job).order_by('occurred_at', 'id')
@@ -324,7 +324,7 @@ class ImportPipelineSmokeTests(TestCase):
 
 		self.assertTrue(created)
 		product = Product.objects.get(institution=source.institution, external_id='SMART_(BYN_804)')
-		self.assertEqual(str(product.units), '7.00000000')
+		self.assertEqual(str(product.units), '7.000000')
 		self.assertTrue(product.is_active)
 		self.assertEqual(str(product.current_price), '10.00000000')
 		self.assertGreater(product.current_value_usd, 0)

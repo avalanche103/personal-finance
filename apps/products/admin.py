@@ -55,6 +55,8 @@ class ProductAdmin(admin.ModelAdmin):
 	def formatted_units(self, obj):
 		if obj.product_type == Product.ProductType.TOKEN:
 			return f'{obj.units:.0f}'
+		if obj.product_type == Product.ProductType.CRYPTO:
+			return f'{obj.units:.6f}'
 		return f'{obj.units:.2f}'
 
 	@admin.display(description='Current price')

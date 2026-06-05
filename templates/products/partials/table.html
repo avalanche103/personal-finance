@@ -39,7 +39,7 @@
                             <td>{{ product.institution.name }}</td>
                             <td>{{ product.get_product_type_display }}</td>
                             <td>{{ product.currency.code }}</td>
-                            <td class="text-right">{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}{% if not product.is_active %}<div class="muted">Closed</div>{% endif %}</td>
+                            <td class="text-right">{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ product.units|floatformat:6 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}{% if not product.is_active %}<div class="muted">Closed</div>{% endif %}</td>
                             {% if group.currency.code == 'BYN' %}
                                 <td class="text-right">{{ product.market_value|floatformat:2 }}</td>
                             {% endif %}
