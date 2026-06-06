@@ -2,11 +2,12 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import Client, TestCase
 from django.urls import reverse
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
@@ -526,4 +527,179 @@ class PriorlifeInsuranceImportTests(TestCase):
 		snapshot = BalanceSnapshot.objects.get(product=product)
 		self.assertEqual(str(snapshot.balance), '3684.14000000')
 
-# Create your tests here.
+
+class ImportManualSyncTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def setUp(self):
+		self.client = Client()
+
+	@patch('apps.imports.views.sync_nbrb_rates_manual')
+	def test_manual_nbrb_sync_redirects_with_success_message(self, sync_nbrb):
+		from apps.imports.services.manual_sync import ManualSyncResult
+
+		source = ImportSource.objects.get(code='nbrb-exrates-api')
+		job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='nbrb-rates:highlight',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='nbrb-exrates-api',
+			rows_detected=21,
+			records_created=21,
+		)
+		sync_nbrb.return_value = ManualSyncResult(
+			True,
+			f'NBRB sync completed. Job #{job.pk}, 3 new rows, 21 stored in range.',
+			job_ids=[job.pk],
+		)
+
+		response = self.client.post(reverse('imports:sync_nbrb'))
+
+		self.assertEqual(response.status_code, 302)
+		self.assertEqual(response['Location'], reverse('imports:upload'))
+		sync_nbrb.assert_called_once()
+
+		follow_up = self.client.get(reverse('imports:upload'))
+		self.assertContains(follow_up, 'NBRB sync completed')
+		self.assertContains(follow_up, 'is-recent-sync')
+
+	@patch('apps.imports.views.sync_binance_manual')
+	def test_manual_binance_sync_redirects_with_success_message(self, sync_binance):
+		from apps.imports.services.manual_sync import ManualSyncResult
+
+		source = ImportSource.objects.get(code='binance-api')
+		spot_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:spot:highlight',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-spot-balances',
+		)
+		earn_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:earn:highlight',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-earn-funding',
+		)
+		sync_binance.return_value = ManualSyncResult(
+			True,
+			f'Binance sync completed. Spot job #{spot_job.pk}, Earn job #{earn_job.pk}.',
+			job_ids=[spot_job.pk, earn_job.pk],
+		)
+
+		response = self.client.post(reverse('imports:sync_binance'))
+
+		self.assertEqual(response.status_code, 302)
+		self.assertEqual(response['Location'], reverse('imports:upload'))
+		sync_binance.assert_called_once()
+
+		follow_up = self.client.get(reverse('imports:upload'))
+		self.assertContains(follow_up, 'Binance sync completed')
+		self.assertContains(follow_up, 'is-recent-sync')
+
+	@patch('apps.imports.views.sync_binance_manual')
+	def test_manual_binance_sync_without_credentials_shows_warning(self, sync_binance):
+		from apps.imports.services.manual_sync import ManualSyncResult
+
+		source = ImportSource.objects.get(code='binance-api')
+		job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:manual:skipped',
+			status=ImportJob.Status.FAILED,
+			file_type='api',
+			parser_name='binance-manual-sync',
+			original_filename='Manual sync',
+			error_message='BINANCE_API_KEY and BINANCE_API_SECRET are not configured.',
+		)
+		sync_binance.return_value = ManualSyncResult(
+			False,
+			'BINANCE_API_KEY and BINANCE_API_SECRET are not configured.',
+			job_ids=[job.pk],
+			details={'skipped': True},
+		)
+
+		response = self.client.post(reverse('imports:sync_binance'))
+		self.assertEqual(response.status_code, 302)
+
+		follow_up = self.client.get(reverse('imports:upload'))
+		self.assertContains(follow_up, 'BINANCE_API_KEY')
+		self.assertContains(follow_up, 'is-recent-sync')
+
+	@patch('apps.imports.services.manual_sync.recalculate_usd_valuations')
+	@patch('apps.imports.services.manual_sync.sync_earn_and_funding')
+	@patch('apps.imports.services.manual_sync.sync_spot_balances')
+	def test_manual_binance_sync_creates_summary_and_recalculate_jobs(self, sync_spot, sync_earn, recalc_usd):
+		from apps.accounts.services.binance import BinanceSyncResult
+		from apps.imports.services.manual_sync import sync_binance_manual
+
+		source = ImportSource.objects.get(code='binance-api')
+		spot_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:spot:multi',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-spot-balances',
+			rows_detected=5,
+		)
+		earn_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:earn:multi',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-earn-funding',
+			rows_detected=3,
+		)
+		sync_spot.return_value = BinanceSyncResult(scope='spot-balances', job_id=spot_job.pk, rows_detected=5, records_updated=5)
+		sync_earn.return_value = BinanceSyncResult(scope='earn-funding', job_id=earn_job.pk, rows_detected=3, records_updated=2)
+		recalc_usd.return_value = {'accounts': 2, 'transactions': 4, 'balance_snapshots': 1, 'products': 3}
+
+		before = ImportJob.objects.count()
+		result = sync_binance_manual()
+
+		self.assertTrue(result.success)
+		self.assertEqual(ImportJob.objects.count(), before + 2)
+		self.assertEqual(len(result.job_ids), 4)
+		parsers = set(
+			ImportJob.objects.filter(pk__in=result.job_ids).values_list('parser_name', flat=True)
+		)
+		self.assertEqual(
+			parsers,
+			{'binance-manual-sync', 'binance-spot-balances', 'binance-earn-funding', 'recalculate-usd-values'},
+		)
+
+	@patch('apps.imports.services.manual_sync.sync_nbrb_rate_history')
+	def test_manual_nbrb_sync_creates_summary_job_in_recent_jobs(self, sync_history):
+		from apps.imports.services.recent_jobs import recent_import_jobs
+
+		source = ImportSource.objects.get(code='nbrb-exrates-api')
+		job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='nbrb-rates:test',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='nbrb-exrates-api',
+			rows_detected=21,
+			records_created=21,
+		)
+		sync_history.return_value = {
+			'job_id': job.pk,
+			'records_created': 0,
+			'stored_total': 21,
+			'rows_detected': 21,
+		}
+
+		response = self.client.post(reverse('imports:sync_nbrb'))
+		self.assertEqual(response.status_code, 302)
+		recent = recent_import_jobs()
+		self.assertEqual(recent[0].parser_name, 'nbrb-manual-sync')
+		self.assertIn(job.pk, [item.pk for item in recent[:3]])
+
+	def test_upload_page_shows_manual_sync_buttons(self):
+		response = self.client.get(reverse('imports:upload'))
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Sync NBRB rates')
+		self.assertContains(response, 'Sync Binance')

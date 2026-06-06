@@ -48,6 +48,24 @@
                 <p class="muted"><a href="{% url 'imports:detail' active_job.pk %}">Open job detail</a></p>
             </div>
         {% endif %}
+
+        <div class="stack-md">
+            <div>
+                <p class="eyebrow">API</p>
+                <h3>Manual sync</h3>
+            </div>
+            <p class="muted">Same flows as the 8-hour scheduler: NBRB pulls the last 7 days; Binance updates Spot, Earn, and Funding.</p>
+            <div class="form-actions">
+                <form method="post" action="{% url 'imports:sync_nbrb' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="button button-secondary">Sync NBRB rates</button>
+                </form>
+                <form method="post" action="{% url 'imports:sync_binance' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="button button-secondary">Sync Binance</button>
+                </form>
+            </div>
+        </div>
     </article>
 
     <article class="panel stack-md">
@@ -58,11 +76,8 @@
             </div>
             <a href="{% url 'imports:history' %}">Full history</a>
         </div>
-        <div id="import-recent-jobs"
-             hx-get="{% url 'imports:history' %}"
-             hx-swap="innerHTML"
-             hx-trigger="load, every 10s">
-            {% include 'imports/partials/history_table.html' with jobs=recent_jobs %}
+        <div id="import-recent-jobs">
+            {% include 'imports/partials/history_table.html' with jobs=recent_jobs highlight_job_ids=highlight_job_ids %}
         </div>
     </article>
 </section>

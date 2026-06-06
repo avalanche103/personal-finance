@@ -13,7 +13,7 @@
         <a class="button" href="{% url 'imports:upload' %}">New upload</a>
     </div>
 
-    <div id="import-history" hx-get="{% url 'imports:history' %}" hx-target="#import-history" hx-trigger="load, every 60s">
+    <div id="import-history">
         {% include 'imports/partials/history_table.html' %}
     </div>
 </section>

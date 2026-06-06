@@ -85,16 +85,19 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': os.getenv('DATABASE_ENGINE', 'django.db.backends.sqlite3'),
-        'NAME': os.getenv('DATABASE_NAME', str(BASE_DIR / 'db.sqlite3')),
-        'USER': os.getenv('DATABASE_USER', ''),
-        'PASSWORD': os.getenv('DATABASE_PASSWORD', ''),
-        'HOST': os.getenv('DATABASE_HOST', ''),
-        'PORT': os.getenv('DATABASE_PORT', ''),
-    }
+_db_engine = os.getenv('DATABASE_ENGINE', 'django.db.backends.sqlite3')
+_db_config = {
+    'ENGINE': _db_engine,
+    'NAME': os.getenv('DATABASE_NAME', str(BASE_DIR / 'db.sqlite3')),
+    'USER': os.getenv('DATABASE_USER', ''),
+    'PASSWORD': os.getenv('DATABASE_PASSWORD', ''),
+    'HOST': os.getenv('DATABASE_HOST', ''),
+    'PORT': os.getenv('DATABASE_PORT', ''),
 }
+if _db_engine == 'django.db.backends.sqlite3':
+    _db_config['OPTIONS'] = {'timeout': 30}
+
+DATABASES = {'default': _db_config}
 
 
 # Password validation

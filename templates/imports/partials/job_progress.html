@@ -1,9 +1,4 @@
-<div id="job-progress-{{ job.pk }}"
-     {% if not progress.is_terminal %}
-         hx-get="{% url 'imports:progress' job.pk %}"
-         hx-trigger="every 2s"
-         hx-swap="outerHTML"
-     {% endif %}>
+<div id="job-progress-{{ job.pk }}">
     <div class="progress-header">
         <span class="status-chip status-{{ job.status }}">{{ progress.status_display }}</span>
         <span class="muted font-mono">{{ progress.percent }}%</span>

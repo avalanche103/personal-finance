@@ -53,6 +53,12 @@ class ImportJob(TimeStampedModel):
 			models.UniqueConstraint(fields=['source', 'idempotency_key'], name='unique_import_job_per_source_key'),
 		]
 
+	def display_activity_at(self):
+		annotated = getattr(self, 'last_activity_at', None)
+		if annotated is not None:
+			return annotated
+		return self.finished_at or self.updated_at or self.created_at
+
 	def __str__(self) -> str:
 		return f'{self.source} - {self.status}'
 

@@ -5,8 +5,10 @@ from django.shortcuts import get_object_or_404, redirect, render
 from apps.imports.forms import ImportUploadForm
 from apps.imports.models import ImportJob
 from apps.imports.services.details import get_editable_records, infer_record_fields, update_editable_record
+from apps.imports.services.manual_sync import sync_binance_manual, sync_nbrb_rates_manual
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
 from apps.imports.services.progress import job_progress
+from apps.imports.services.recent_jobs import recent_import_jobs, recent_import_jobs_queryset
 
 
 def import_upload(request):
@@ -28,17 +30,27 @@ def import_upload(request):
         .order_by('-created_at')
         .first()
     )
+    highlight_job_ids = request.session.pop('recent_job_ids', [])
     context = {
         'form': form,
-        'recent_jobs': ImportJob.objects.select_related('source').order_by('-created_at')[:10],
+        'recent_jobs': recent_import_jobs(),
+        'highlight_job_ids': highlight_job_ids,
         'active_job': active_job,
         'active_progress': job_progress(active_job) if active_job else None,
     }
     return render(request, 'imports/upload.html', context)
 
 
+def import_recent_jobs(request):
+    return render(
+        request,
+        'imports/partials/history_table.html',
+        {'jobs': recent_import_jobs()},
+    )
+
+
 def import_history(request):
-    jobs = ImportJob.objects.select_related('source', 'institution').order_by('-created_at')
+    jobs = recent_import_jobs_queryset()
     context = {'jobs': jobs}
     template_name = 'imports/partials/history_table.html' if request.headers.get('HX-Request') == 'true' else 'imports/history.html'
     return render(request, template_name, context)
@@ -62,6 +74,35 @@ def import_job_progress(request, pk):
     job = get_object_or_404(ImportJob, pk=pk)
     context = {'job': job, 'progress': job_progress(job)}
     return render(request, 'imports/partials/job_progress.html', context)
+
+
+def import_sync_nbrb(request):
+	if request.method != 'POST':
+		return HttpResponseBadRequest('POST required')
+
+	result = sync_nbrb_rates_manual()
+	if result.success:
+		messages.success(request, result.message)
+	else:
+		messages.error(request, result.message)
+	if result.job_ids:
+		request.session['recent_job_ids'] = result.job_ids
+	return redirect('imports:upload')
+
+
+def import_sync_binance(request):
+	if request.method != 'POST':
+		return HttpResponseBadRequest('POST required')
+
+	result = sync_binance_manual()
+	if result.success:
+		messages.success(request, result.message)
+	else:
+		level = messages.warning if result.details.get('skipped') else messages.error
+		level(request, result.message)
+	if result.job_ids:
+		request.session['recent_job_ids'] = result.job_ids
+	return redirect('imports:upload')
 
 
 def import_record_update(request, pk, row_index):

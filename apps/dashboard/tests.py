@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import Client, TestCase
 from django.utils import timezone
@@ -105,6 +106,13 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'chart-range-btn is-active')
 		self.assertContains(response, 'Total USD')
+
+	@patch('apps.common.services.exchange_rates.ensure_nbrb_rates_current')
+	def test_dashboard_does_not_fetch_nbrb_rates_on_load(self, ensure_rates):
+		for url in ['/', '/exchange-rates/', '/partials/latest-rates/']:
+			response = self.client.get(url)
+			self.assertEqual(response.status_code, 200, url)
+		ensure_rates.assert_not_called()
 
 	def test_dashboard_contains_bootstrap_cards(self):
 		response = self.client.get('/')

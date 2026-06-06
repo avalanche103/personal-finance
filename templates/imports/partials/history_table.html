@@ -2,7 +2,7 @@
     <table class="data-table">
         <thead>
             <tr>
-                <th>Created</th>
+                <th>Updated</th>
                 <th>Source</th>
                 <th>File</th>
                 <th>Status</th>
@@ -13,8 +13,8 @@
         </thead>
         <tbody>
             {% for job in jobs %}
-                <tr>
-                    <td class="font-mono">{{ job.created_at|display_datetime }}</td>
+                <tr{% if highlight_job_ids and job.pk in highlight_job_ids %} class="is-recent-sync"{% endif %}>
+                    <td class="font-mono">{{ job.display_activity_at|display_datetime }}</td>
                     <td>{{ job.source.name }}</td>
                     <td>{{ job.original_filename|default:'Manual/API job' }}</td>
                     <td><span class="status-chip status-{{ job.status }}">{{ job.get_status_display }}</span></td>

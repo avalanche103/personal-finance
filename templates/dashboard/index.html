@@ -10,7 +10,7 @@
 
 {% block content %}
 <section class="stack-lg">
-    <div id="summary-row" hx-get="{% url 'dashboard:summary' %}" hx-trigger="load, every 60s" hx-swap="innerHTML">
+    <div id="summary-row">
         {% include 'dashboard/partials/summary_row.html' %}
     </div>
 
@@ -84,7 +84,7 @@
                 </div>
                 <a href="{% url 'imports:history' %}">History</a>
             </div>
-            <div id="recent-imports" hx-get="{% url 'dashboard:recent_imports' %}" hx-trigger="load, every 60s">
+            <div id="recent-imports">
                 {% include 'dashboard/partials/recent_imports.html' %}
             </div>
         </article>
@@ -97,7 +97,7 @@
                 </div>
                 <a href="{% url 'dashboard:exchange_rates' %}">History</a>
             </div>
-            <div id="latest-rates" hx-get="{% url 'dashboard:latest_rates' %}" hx-trigger="load, every 3600s">
+            <div id="latest-rates">
                 {% include 'dashboard/partials/latest_rates.html' %}
             </div>
         </article>
