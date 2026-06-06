@@ -426,6 +426,13 @@ def estimate_next_income_date(product: Product, *, today: date | None = None) ->
 			return product.maturity_date
 		return None
 
+	if product.product_type == Product.ProductType.DEPOSIT and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+		from apps.products.services.deposit_schedule import estimate_deposit_next_income_date
+
+		scheduled = estimate_deposit_next_income_date(product, today=reference)
+		if scheduled is not None:
+			return scheduled
+
 	if not payment_dates:
 		if product.next_income_date and product.next_income_date >= reference:
 			return product.next_income_date

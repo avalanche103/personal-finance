@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from apps.products.analytics import product_group_label, product_group_key
 from apps.products.models import Product
+from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
 from apps.products.services.token_terms import estimate_next_income_amount, estimate_next_income_date
 
 
@@ -184,6 +185,32 @@ def build_operations_calendar(
                     amount=amount,
                     amount_usd=amount_usd,
                     description='Deposit interest expected at maturity',
+                )
+            continue
+
+        if (
+            product.product_type == Product.ProductType.DEPOSIT
+            and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY
+        ):
+            forecast_dates = upcoming_deposit_income_dates(
+                product,
+                reference=reference,
+                window_end=window_end,
+            )
+            for forecast_date in forecast_dates:
+                amount, amount_usd = estimate_next_income_amount(product)
+                _append_income_event(
+                    day_groups,
+                    product=product,
+                    label=label,
+                    forecast_date=forecast_date,
+                    amount=amount,
+                    amount_usd=amount_usd,
+                    description=(
+                        f'{product.annual_rate_pct}% p.a. · position × rate / period'
+                        if product.annual_rate_pct
+                        else 'Estimated from income payment history'
+                    ),
                 )
             continue
 

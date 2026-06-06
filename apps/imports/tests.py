@@ -12,6 +12,9 @@ from django.urls import reverse
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
+from apps.common.services.alfabank_deposits import parse_alfabank_deposit_statement
+from apps.common.services.belarusbank_deposits import parse_belarusbank_deposit_statement
+from apps.common.services.bnb_deposits import parse_bnb_deposit_statement
 from apps.common.services.priorlife_insurance import (
 	compute_priorlife_balances,
 	parse_priorlife_contributions,
@@ -526,6 +529,225 @@ class PriorlifeInsuranceImportTests(TestCase):
 
 		snapshot = BalanceSnapshot.objects.get(product=product)
 		self.assertEqual(str(snapshot.balance), '3684.14000000')
+
+
+class BnbDepositImportTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def _pdf_path(self, filename: str) -> Path:
+		path = Path(settings.BASE_DIR) / filename
+		self.assertTrue(path.exists(), f'Missing fixture PDF: {path}')
+		return path
+
+	def test_parse_bnb1_deposit_statement_pdf(self):
+		result = parse_bnb_deposit_statement(self._pdf_path('BNB1.pdf'))
+		self.assertEqual(result.metadata['parser_variant'], 'bnb-deposit-statement')
+		self.assertEqual(result.metadata['contract_number'], '1112109330009211')
+		statement = result.artifacts['statement']
+		self.assertEqual(statement['as_of_date'], '2026-06-06')
+		self.assertEqual(statement['initial_amount_byn'], '1671.50')
+		self.assertEqual(statement['balance_byn'], '1877.00')
+		self.assertEqual(statement['annual_rate_pct'], '15.64')
+		self.assertEqual(statement['maturity_date'], '2027-01-03')
+		self.assertEqual(result.metadata['rows'], 13)
+
+	def test_parse_bnb2_deposit_statement_pdf(self):
+		result = parse_bnb_deposit_statement(self._pdf_path('BNB2.pdf'))
+		statement = result.artifacts['statement']
+		self.assertEqual(result.metadata['contract_number'], '1112449330000404')
+		self.assertEqual(statement['balance_byn'], '1115.04')
+		self.assertEqual(statement['annual_rate_pct'], '14.91')
+		self.assertEqual(result.metadata['rows'], 1)
+
+	def test_import_bnb_deposit_pipeline(self):
+		institution = FinancialInstitution.objects.get(slug='bnb-bank')
+		source = ImportSource.objects.get(code='bnb-deposit-statement')
+		bank_account = Account.objects.get(institution=institution, name='БНБ-Банк BYN Account')
+
+		for filename, product_name, contract_number, balance in [
+			('BNB1.pdf', 'BNB1', '1112109330009211', Decimal('1877.00')),
+			('BNB2.pdf', 'BNB2', '1112449330000404', Decimal('1115.04')),
+		]:
+			upload = SimpleUploadedFile(
+				filename,
+				self._pdf_path(filename).read_bytes(),
+				content_type='application/pdf',
+			)
+			job, created = process_uploaded_import(source, upload)
+			self.assertTrue(created)
+			self.assertEqual(job.status, ImportJob.Status.SAVED)
+			self.assertEqual(job.details['metadata']['parser_variant'], 'bnb-deposit-statement')
+
+			product = Product.objects.get(institution=institution, external_id=contract_number)
+			self.assertEqual(product.name, product_name)
+			self.assertEqual(product.product_type, Product.ProductType.DEPOSIT)
+			self.assertEqual(product.income_account, bank_account)
+			self.assertEqual(product.units, balance)
+			self.assertEqual(product.metadata['interest_mode'], 'capitalized')
+			self.assertEqual(str(product.current_price), '1.00000000')
+
+		bnb1 = Product.objects.get(external_id='1112109330009211')
+		self.assertEqual(
+			Transaction.objects.filter(
+				product=bnb1,
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+			).count(),
+			1,
+		)
+		capitalized = Transaction.objects.filter(
+			product=bnb1,
+			transaction_type=Transaction.TransactionType.INCOME,
+			metadata__interest_mode='capitalized',
+		)
+		self.assertEqual(capitalized.count(), 12)
+		self.assertEqual(sum(tx.amount for tx in capitalized), Decimal('205.50'))
+
+		bnb2 = Product.objects.get(external_id='1112449330000404')
+		self.assertEqual(
+			Transaction.objects.filter(product=bnb2).count(),
+			1,
+		)
+		self.assertEqual(BalanceSnapshot.objects.filter(product=bnb1).count(), 1)
+		self.assertEqual(BalanceSnapshot.objects.filter(product=bnb2).count(), 1)
+
+
+class BelarusbankDepositImportTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def _pdf_path(self, filename: str) -> Path:
+		path = Path(settings.BASE_DIR) / filename
+		self.assertTrue(path.exists(), f'Missing fixture PDF: {path}')
+		return path
+
+	def test_parse_belarusbank_deposit_statement_pdf(self):
+		result = parse_belarusbank_deposit_statement(self._pdf_path('Belarusbank.pdf'))
+		self.assertEqual(result.metadata['parser_variant'], 'belarusbank-deposit-statement')
+		self.assertEqual(result.metadata['iban'], 'BY74AKBB34140038751750070000')
+		statement = result.artifacts['statement']
+		self.assertEqual(statement['as_of_date'], '2026-06-06')
+		self.assertEqual(statement['initial_amount_byn'], '1868.71')
+		self.assertEqual(statement['balance_byn'], '2045.48')
+		self.assertEqual(statement['maturity_date'], '2029-04-05')
+		self.assertEqual(result.metadata['rows'], 7)
+		self.assertIn('Правильный выбор онлайн', statement['deposit_name'])
+
+	def test_import_belarusbank_deposit_pipeline(self):
+		institution = FinancialInstitution.objects.get(slug='belarusbank')
+		source = ImportSource.objects.get(code='belarusbank-deposit-statement')
+		bank_account = Account.objects.get(institution=institution, name='Беларусбанк BYN Account')
+
+		upload = SimpleUploadedFile(
+			'Belarusbank.pdf',
+			self._pdf_path('Belarusbank.pdf').read_bytes(),
+			content_type='application/pdf',
+		)
+		job, created = process_uploaded_import(source, upload)
+		self.assertTrue(created)
+		self.assertEqual(job.status, ImportJob.Status.SAVED)
+		self.assertEqual(job.details['metadata']['parser_variant'], 'belarusbank-deposit-statement')
+
+		product = Product.objects.get(
+			institution=institution,
+			external_id='BY74AKBB34140038751750070000',
+		)
+		self.assertEqual(product.name, 'Belarusbank')
+		self.assertEqual(product.product_type, Product.ProductType.DEPOSIT)
+		self.assertEqual(product.income_account, bank_account)
+		self.assertEqual(product.units, Decimal('2045.48'))
+		self.assertEqual(product.metadata['interest_mode'], 'capitalized')
+		self.assertGreater(product.annual_rate_pct, Decimal('14'))
+
+		deposits = Transaction.objects.filter(
+			product=product,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+		)
+		self.assertEqual(deposits.count(), 4)
+		self.assertEqual(sum(tx.amount for tx in deposits), Decimal('1971.94'))
+
+		capitalized = Transaction.objects.filter(
+			product=product,
+			transaction_type=Transaction.TransactionType.INCOME,
+			metadata__interest_mode='capitalized',
+		)
+		self.assertEqual(capitalized.count(), 3)
+		self.assertEqual(sum(tx.amount for tx in capitalized), Decimal('73.54'))
+
+
+class AlfabankDepositImportTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def _pdf_path(self, filename: str) -> Path:
+		path = Path(settings.BASE_DIR) / filename
+		self.assertTrue(path.exists(), f'Missing fixture PDF: {path}')
+		return path
+
+	def test_parse_alfa1_deposit_statement_pdf(self):
+		result = parse_alfabank_deposit_statement(self._pdf_path('ALFA1.pdf'))
+		self.assertEqual(result.metadata['parser_variant'], 'alfabank-deposit-statement')
+		statement = result.artifacts['statement']
+		self.assertEqual(result.metadata['contract_number'], 'BY95ALFA341430LV871050270000')
+		self.assertEqual(statement['balance_byn'], '1086.02')
+		self.assertEqual(statement['initial_amount_byn'], '476.25')
+		self.assertEqual(statement['annual_rate_pct'], '16.0000000')
+		self.assertEqual(result.metadata['rows'], 26)
+
+	def test_import_alfabank_deposit_pipeline(self):
+		from apps.products.operations_calendar import build_operations_calendar
+
+		institution = FinancialInstitution.objects.get(slug='alfabank')
+		source = ImportSource.objects.get(code='alfabank-deposit-statement')
+		bank_account = Account.objects.get(institution=institution, name='АльфаБанк BYN Account')
+		before_balance = bank_account.current_balance
+
+		for filename, product_name, contract_number, balance, next_income in [
+			('ALFA1.pdf', 'ALFA1', 'BY95ALFA341430LV871050270000', Decimal('1086.02'), date(2026, 6, 10)),
+			('ALFA2.pdf', 'ALFA2', 'BY13ALFA341430LV871040270000', Decimal('616.75'), date(2026, 6, 10)),
+			('ALFA3.pdf', 'ALFA3', 'BY28ALFA341430LV871030270000', Decimal('530.95'), date(2026, 6, 11)),
+		]:
+			upload = SimpleUploadedFile(
+				filename,
+				self._pdf_path(filename).read_bytes(),
+				content_type='application/pdf',
+			)
+			job, created = process_uploaded_import(source, upload)
+			self.assertTrue(created)
+			self.assertEqual(job.status, ImportJob.Status.SAVED)
+
+			product = Product.objects.get(institution=institution, external_id=contract_number)
+			self.assertEqual(product.name, product_name)
+			self.assertEqual(product.units, balance)
+			self.assertEqual(product.metadata['interest_mode'], 'payout')
+			self.assertEqual(product.income_schedule, Product.IncomeSchedule.TWICE_MONTHLY)
+			self.assertEqual(product.next_income_date, next_income)
+
+		bank_account.refresh_from_db()
+		self.assertEqual(bank_account.current_balance, before_balance)
+
+		alfa1 = Product.objects.get(external_id='BY95ALFA341430LV871050270000')
+		self.assertEqual(
+			Transaction.objects.filter(product=alfa1, transaction_type=Transaction.TransactionType.DEPOSIT).count(),
+			27,
+		)
+		self.assertFalse(
+			Transaction.objects.filter(product=alfa1, transaction_type=Transaction.TransactionType.INCOME).exists()
+		)
+
+		calendar = build_operations_calendar(
+			list(Product.objects.filter(external_id__startswith='BY').order_by('name')),
+			today=date(2026, 6, 6),
+			future_days=60,
+		)
+		forecast_dates = [day['date'] for day in calendar]
+		self.assertIn(date(2026, 6, 10), forecast_dates)
+		self.assertIn(date(2026, 6, 25), forecast_dates)
+		self.assertIn(date(2026, 6, 11), forecast_dates)
+		self.assertIn(date(2026, 6, 26), forecast_dates)
 
 
 class ImportManualSyncTests(TestCase):

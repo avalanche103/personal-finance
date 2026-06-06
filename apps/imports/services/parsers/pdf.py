@@ -1,5 +1,20 @@
 from pathlib import Path
 
+from apps.common.services.alfabank_deposits import (
+	is_alfabank_deposit_statement_text,
+	parse_alfabank_deposit_statement,
+	persist_alfabank_deposit_statement,
+)
+from apps.common.services.belarusbank_deposits import (
+	is_belarusbank_deposit_statement_text,
+	parse_belarusbank_deposit_statement,
+	persist_belarusbank_deposit_statement,
+)
+from apps.common.services.bnb_deposits import (
+	is_bnb_deposit_statement_text,
+	parse_bnb_deposit_statement,
+	persist_bnb_deposit_statement,
+)
 from apps.common.services.priorlife_insurance import (
 	is_priorlife_contributions_text,
 	parse_priorlife_contributions,
@@ -46,6 +61,12 @@ class PDFImportParser(BaseImportParser):
 		if raw_import_file.source and isinstance(raw_import_file.source.config, dict):
 			parser_hint = str(raw_import_file.source.config.get('parser', '')).strip()
 
+		if parser_hint == 'alfabank-deposit-statement' or is_alfabank_deposit_statement_text(preview_text):
+			return parse_alfabank_deposit_statement(file_path)
+		if parser_hint == 'belarusbank-deposit-statement' or is_belarusbank_deposit_statement_text(preview_text):
+			return parse_belarusbank_deposit_statement(file_path)
+		if parser_hint == 'bnb-deposit-statement' or is_bnb_deposit_statement_text(preview_text):
+			return parse_bnb_deposit_statement(file_path)
 		if parser_hint == 'stravita-extract' or is_stravita_extract_text(preview_text):
 			return parse_stravita_extract(file_path)
 		if parser_hint == 'priorlife-contributions' or is_priorlife_contributions_text(preview_text):
@@ -81,6 +102,12 @@ class PDFImportParser(BaseImportParser):
 
 				management_expense_pct = Decimal(str(raw_pct))
 
+		if parser_variant == 'alfabank-deposit-statement':
+			return persist_alfabank_deposit_statement(raw_import_file, result)
+		if parser_variant == 'belarusbank-deposit-statement':
+			return persist_belarusbank_deposit_statement(raw_import_file, result)
+		if parser_variant == 'bnb-deposit-statement':
+			return persist_bnb_deposit_statement(raw_import_file, result)
 		if parser_variant == 'stravita-extract':
 			return persist_stravita_extract(
 				raw_import_file,

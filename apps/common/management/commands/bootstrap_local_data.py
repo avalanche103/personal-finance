@@ -111,6 +111,17 @@ class Command(BaseCommand):
 				'metadata': {'bootstrap': True},
 			},
 		)
+		belarusbank, _ = FinancialInstitution.objects.update_or_create(
+			slug='belarusbank',
+			defaults={
+				'name': 'Беларусбанк',
+				'institution_type': FinancialInstitution.InstitutionType.BANK,
+				'country': 'BY',
+				'website': 'https://belarusbank.by/',
+				'base_currency': byn,
+				'metadata': {'bootstrap': True},
+			},
+		)
 		bynex, _ = FinancialInstitution.objects.update_or_create(
 			slug='bynex',
 			defaults={
@@ -243,6 +254,36 @@ class Command(BaseCommand):
 				},
 			},
 		)
+		ImportSource.objects.update_or_create(
+			code='bnb-deposit-statement',
+			defaults={
+				'institution': bnb_bank,
+				'name': 'BNB Bank Deposit Statement',
+				'source_type': ImportSource.SourceType.PDF,
+				'is_active': True,
+				'config': {'parser': 'bnb-deposit-statement', 'bootstrap': True},
+			},
+		)
+		ImportSource.objects.update_or_create(
+			code='belarusbank-deposit-statement',
+			defaults={
+				'institution': belarusbank,
+				'name': 'Belarusbank Deposit Statement',
+				'source_type': ImportSource.SourceType.PDF,
+				'is_active': True,
+				'config': {'parser': 'belarusbank-deposit-statement', 'bootstrap': True},
+			},
+		)
+		ImportSource.objects.update_or_create(
+			code='alfabank-deposit-statement',
+			defaults={
+				'institution': alfabank,
+				'name': 'Alfabank Deposit Statement',
+				'source_type': ImportSource.SourceType.PDF,
+				'is_active': True,
+				'config': {'parser': 'alfabank-deposit-statement', 'bootstrap': True},
+			},
+		)
 
 		Account.objects.get_or_create(
 			institution=aigenis,
@@ -296,6 +337,21 @@ class Command(BaseCommand):
 				account.account_type = Account.AccountType.BANK
 				account.currency = currency
 				account.save(update_fields=['account_type', 'currency', 'updated_at'])
+		belarusbank_byn_account, created = Account.objects.get_or_create(
+			institution=belarusbank,
+			name='Беларусбанк BYN Account',
+			defaults={
+				'account_type': Account.AccountType.BANK,
+				'currency': byn,
+				'current_balance': Decimal('0.00'),
+				'current_balance_usd': Decimal('0.00'),
+				'metadata': {'bootstrap': True},
+			},
+		)
+		if not created:
+			belarusbank_byn_account.account_type = Account.AccountType.BANK
+			belarusbank_byn_account.currency = byn
+			belarusbank_byn_account.save(update_fields=['account_type', 'currency', 'updated_at'])
 
 		Account.objects.get_or_create(
 			institution=bynex,
