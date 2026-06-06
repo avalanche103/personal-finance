@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.utils import timezone
@@ -64,6 +64,81 @@ def _append_maturity_event(
     )
 
 
+def _metadata_date(product: Product, key: str) -> date | None:
+    metadata = product.metadata if isinstance(product.metadata, dict) else {}
+    raw_value = str(metadata.get(key, '') or '').strip()
+    if not raw_value:
+        return None
+    for fmt in ('%Y-%m-%d', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(raw_value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _estimate_deposit_maturity_income_amount(product: Product) -> tuple[Decimal | None, Decimal | None]:
+    if product.product_type != Product.ProductType.DEPOSIT:
+        return None, None
+    if product.annual_rate_pct is None or product.annual_rate_pct <= 0 or product.maturity_date is None:
+        return None, None
+
+    principal = product.market_value
+    if principal <= 0:
+        return None, None
+
+    opened_at = _metadata_date(product, 'opened_at')
+    term_days = max((product.maturity_date - opened_at).days, 1) if opened_at else 365
+    amount = (
+        principal
+        * product.annual_rate_pct
+        / Decimal('100')
+        * Decimal(term_days)
+        / Decimal('365')
+    ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    amount_usd = None
+    if product.current_value_usd and product.current_value_usd > 0:
+        amount_usd = (
+            product.current_value_usd
+            * product.annual_rate_pct
+            / Decimal('100')
+            * Decimal(term_days)
+            / Decimal('365')
+        ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    elif getattr(product, 'currency', None) is not None and product.currency.usd_rate:
+        amount_usd = (amount * product.currency.usd_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    return amount, amount_usd
+
+
+def _append_income_event(
+    day_groups: dict[date, dict[str, list[dict]]],
+    *,
+    product: Product,
+    label: str,
+    forecast_date: date,
+    amount: Decimal | None,
+    amount_usd: Decimal | None,
+    description: str,
+) -> None:
+    day_groups[forecast_date][label].append(
+        {
+            'kind': 'income_forecast',
+            'is_forecast': True,
+            'product': product,
+            'product_name': product.name,
+            'transaction_type': 'Income (forecast)',
+            'operation_type': 'Прогноз выплаты',
+            'description': description,
+            'amount_usd': amount_usd,
+            'currency_code': product.currency.code,
+            'amount': amount,
+            'annual_rate_pct': product.annual_rate_pct,
+            'income_schedule': product.get_income_schedule_display() if product.income_schedule else '',
+        }
+    )
+
+
 def _sum_group_forecast_amounts(events: list[dict]) -> dict:
     native_amounts = [event['amount'] for event in events if event.get('amount') is not None]
     usd_amounts = [event['amount_usd'] for event in events if event.get('amount_usd') is not None]
@@ -89,15 +164,27 @@ def build_operations_calendar(
     for product in products:
         if not product.is_active:
             continue
-        if product.product_type not in (Product.ProductType.TOKEN, Product.ProductType.BOND):
+        if product.product_type not in (Product.ProductType.TOKEN, Product.ProductType.BOND, Product.ProductType.DEPOSIT):
             continue
 
         label = product_group_label(*product_group_key(product))
+        maturity_in_window = _maturity_in_window(product, reference=reference, window_end=window_end)
 
-        if _maturity_in_window(product, reference=reference, window_end=window_end):
+        if maturity_in_window:
             _append_maturity_event(day_groups, product=product, label=label)
 
         if product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
+            if product.product_type == Product.ProductType.DEPOSIT and maturity_in_window:
+                amount, amount_usd = _estimate_deposit_maturity_income_amount(product)
+                _append_income_event(
+                    day_groups,
+                    product=product,
+                    label=label,
+                    forecast_date=product.maturity_date,
+                    amount=amount,
+                    amount_usd=amount_usd,
+                    description='Deposit interest expected at maturity',
+                )
             continue
 
         forecast_date = estimate_next_income_date(product, today=reference)
@@ -105,25 +192,18 @@ def build_operations_calendar(
             continue
 
         amount, amount_usd = estimate_next_income_amount(product)
-        day_groups[forecast_date][label].append(
-            {
-                'kind': 'income_forecast',
-                'is_forecast': True,
-                'product': product,
-                'product_name': product.name,
-                'transaction_type': 'Income (forecast)',
-                'operation_type': 'Прогноз выплаты',
-                'description': (
-                    f'{product.annual_rate_pct}% p.a. · position × rate / period'
-                    if product.annual_rate_pct
-                    else 'Estimated from income payment history'
-                ),
-                'amount_usd': amount_usd,
-                'currency_code': product.currency.code,
-                'amount': amount,
-                'annual_rate_pct': product.annual_rate_pct,
-                'income_schedule': product.get_income_schedule_display() if product.income_schedule else '',
-            }
+        _append_income_event(
+            day_groups,
+            product=product,
+            label=label,
+            forecast_date=forecast_date,
+            amount=amount,
+            amount_usd=amount_usd,
+            description=(
+                f'{product.annual_rate_pct}% p.a. · position × rate / period'
+                if product.annual_rate_pct
+                else 'Estimated from income payment history'
+            ),
         )
 
     calendar_days = []

@@ -9,6 +9,9 @@ class AccountAdmin(admin.ModelAdmin):
 	list_filter = ('account_type', 'currency', 'is_active')
 	search_fields = ('name', 'institution__name', 'external_id')
 
+	def has_add_permission(self, request):
+		return False
+
 	@admin.display(description='Current balance')
 	def formatted_current_balance(self, obj):
 		return f'{obj.current_balance:.2f}'
@@ -24,6 +27,9 @@ class TransactionAdmin(admin.ModelAdmin):
 	list_filter = ('transaction_type', 'currency')
 	search_fields = ('description', 'external_id', 'account__name', 'product__name')
 	autocomplete_fields = ('account', 'related_account', 'product', 'import_job', 'currency')
+
+	def has_add_permission(self, request):
+		return False
 
 	@admin.display(description='Amount')
 	def formatted_amount(self, obj):

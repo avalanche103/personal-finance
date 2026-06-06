@@ -10,7 +10,10 @@
             <p class="eyebrow">Ledger</p>
             <h2>Accounts list</h2>
         </div>
-        <a class="button" href="/admin/accounts/account/add/">Add account</a>
+        <div class="form-actions">
+            <a class="button button-secondary" href="{% url 'accounts:transaction_create' %}">Add transaction</a>
+            <a class="button" href="{% url 'accounts:create' %}">Add account</a>
+        </div>
     </div>
 
     <form class="filter-bar" hx-get="{% url 'accounts:list' %}" hx-target="#account-table" hx-trigger="keyup changed delay:300ms from:#account-search">

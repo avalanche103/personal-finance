@@ -1,3 +1,5 @@
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -47,7 +49,99 @@ def _resolve_portfolio_chart_mode(mode_key: str | None) -> str:
     return DEFAULT_PORTFOLIO_CHART_MODE
 
 
-def _portfolio_chart_points(as_of_date: date, range_key: str = DEFAULT_PORTFOLIO_CHART_RANGE) -> list[dict]:
+@dataclass
+class PortfolioHistoryCache:
+    accounts: list[Account]
+    products: list[Product]
+    transaction_map: dict[int, list[Transaction]]
+    account_snapshots: dict[int, list[BalanceSnapshot]]
+    product_snapshots: dict[int, list[BalanceSnapshot]]
+    exchange_rates_by_code: dict[str, list[ExchangeRateHistory]]
+
+    @classmethod
+    def build(cls) -> 'PortfolioHistoryCache':
+        accounts = list(Account.objects.select_related('institution', 'currency').all())
+        products = list(Product.objects.select_related('institution', 'currency').all())
+        insurance_product_ids = [
+            product.id
+            for product in products
+            if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE)
+        ]
+        account_snapshots: dict[int, list[BalanceSnapshot]] = defaultdict(list)
+        for snapshot in BalanceSnapshot.objects.filter(account_id__isnull=False).order_by(
+            'account_id',
+            '-captured_at',
+            '-id',
+        ):
+            account_snapshots[snapshot.account_id].append(snapshot)
+
+        product_snapshots: dict[int, list[BalanceSnapshot]] = defaultdict(list)
+        for snapshot in BalanceSnapshot.objects.filter(product_id__isnull=False).order_by(
+            'product_id',
+            '-captured_at',
+            '-id',
+        ):
+            product_snapshots[snapshot.product_id].append(snapshot)
+
+        exchange_rates_by_code: dict[str, list[ExchangeRateHistory]] = defaultdict(list)
+        for row in ExchangeRateHistory.objects.filter(
+            source=ExchangeRateHistory.Source.NBRB,
+        ).select_related('currency').order_by('currency__code', '-rate_date'):
+            exchange_rates_by_code[row.currency.code].append(row)
+
+        return cls(
+            accounts=accounts,
+            products=products,
+            transaction_map=build_product_transaction_map(insurance_product_ids),
+            account_snapshots=dict(account_snapshots),
+            product_snapshots=dict(product_snapshots),
+            exchange_rates_by_code=dict(exchange_rates_by_code),
+        )
+
+
+def _balance_snapshot_as_of(snapshots: list[BalanceSnapshot], as_of_date: date, fallback: Decimal) -> Decimal:
+    for snapshot in snapshots:
+        if snapshot.captured_at.date() <= as_of_date:
+            return snapshot.balance
+    return fallback
+
+
+def _usd_rate_from_cache(
+    currency,
+    target_date: date,
+    rate_cache: dict[tuple[str, str], Decimal],
+    exchange_rates_by_code: dict[str, list[ExchangeRateHistory]],
+) -> Decimal:
+    cache_key = (currency.code, target_date.isoformat())
+    if cache_key in rate_cache:
+        return rate_cache[cache_key]
+
+    if currency.code == 'USD':
+        rate_cache[cache_key] = Decimal('1')
+        return rate_cache[cache_key]
+
+    if currency.code == 'BYN':
+        for row in exchange_rates_by_code.get('USD', []):
+            if row.rate_date <= target_date and row.rate_byn:
+                rate_cache[cache_key] = Decimal('1') / row.rate_byn
+                return rate_cache[cache_key]
+
+    for row in exchange_rates_by_code.get(currency.code, []):
+        if row.rate_date <= target_date:
+            rate_cache[cache_key] = row.usd_cross_rate
+            return rate_cache[cache_key]
+
+    default_rate = currency.usd_rate if currency.usd_rate else Decimal('0')
+    rate_cache[cache_key] = default_rate
+    return default_rate
+
+
+def _portfolio_chart_points(
+    as_of_date: date,
+    range_key: str = DEFAULT_PORTFOLIO_CHART_RANGE,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+) -> list[dict]:
     config = PORTFOLIO_CHART_RANGES[_resolve_portfolio_chart_range(range_key)]
     span_days = config['span_days']
     step_days = config['step_days']
@@ -55,9 +149,10 @@ def _portfolio_chart_points(as_of_date: date, range_key: str = DEFAULT_PORTFOLIO
     if point_dates[-1] != as_of_date:
         point_dates.append(as_of_date)
 
+    portfolio_cache = portfolio_cache or PortfolioHistoryCache.build()
     points = []
     for point_date in point_dates:
-        snapshot = _historical_portfolio_context(point_date)
+        snapshot = _historical_portfolio_context(point_date, portfolio_cache=portfolio_cache)
         points.append({'date': point_date, 'value': float(snapshot['portfolio_usd'])})
     return points
 
@@ -94,11 +189,13 @@ def _portfolio_chart_context(
     range_key: str | None = None,
     mode_key: str | None = None,
     as_of_date: date | None = None,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
 ) -> dict:
     as_of_date = as_of_date or timezone.localdate()
     chart_range = _resolve_portfolio_chart_range(range_key)
     chart_mode = _resolve_portfolio_chart_mode(mode_key)
-    chart_points = _portfolio_chart_points(as_of_date, chart_range)
+    chart_points = _portfolio_chart_points(as_of_date, chart_range, portfolio_cache=portfolio_cache)
     config = PORTFOLIO_CHART_RANGES[chart_range]
     return {
         'chart_range': chart_range,
@@ -180,13 +277,19 @@ def _value_change(current: Decimal, baseline: Decimal) -> dict:
     }
 
 
-def _build_portfolio_period_comparisons(as_of_date: date, current: dict) -> list[dict]:
+def _build_portfolio_period_comparisons(
+    as_of_date: date,
+    current: dict,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+) -> list[dict]:
+    portfolio_cache = portfolio_cache or PortfolioHistoryCache.build()
     comparisons = []
     for key, label, reference_date in (
         ('prev_month', 'Last day of previous month', _last_day_of_previous_month(as_of_date)),
         ('prev_year', 'Last day of previous year', _last_day_of_previous_year(as_of_date)),
     ):
-        baseline = _historical_portfolio_context(reference_date)
+        baseline = _historical_portfolio_context(reference_date, portfolio_cache=portfolio_cache)
         comparisons.append(
             {
                 'key': key,
@@ -204,16 +307,35 @@ def _is_current_portfolio_date(as_of_date) -> bool:
     return as_of_date == timezone.localdate()
 
 
-def _account_value_as_of(account: Account, as_of_date, rate_cache: dict) -> Decimal:
+def _account_value_as_of(
+    account: Account,
+    as_of_date,
+    rate_cache: dict,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+) -> Decimal:
     if _is_current_portfolio_date(as_of_date):
         return account.current_balance_usd or Decimal('0')
-    snapshot = (
-        account.balance_snapshots.filter(captured_at__date__lte=as_of_date)
-        .order_by('-captured_at', '-id')
-        .first()
-    )
-    balance = snapshot.balance if snapshot else account.current_balance
-    rate = get_usd_conversion_rate(account.currency, as_of_date, rate_cache)
+    if portfolio_cache is not None:
+        balance = _balance_snapshot_as_of(
+            portfolio_cache.account_snapshots.get(account.id, []),
+            as_of_date,
+            account.current_balance,
+        )
+        rate = _usd_rate_from_cache(
+            account.currency,
+            as_of_date,
+            rate_cache,
+            portfolio_cache.exchange_rates_by_code,
+        )
+    else:
+        snapshot = (
+            account.balance_snapshots.filter(captured_at__date__lte=as_of_date)
+            .order_by('-captured_at', '-id')
+            .first()
+        )
+        balance = snapshot.balance if snapshot else account.current_balance
+        rate = get_usd_conversion_rate(account.currency, as_of_date, rate_cache)
     return balance * rate
 
 
@@ -229,40 +351,69 @@ def _product_value_as_of(
     rate_cache: dict,
     *,
     transaction_map: dict[int, list[Transaction]] | None = None,
+    portfolio_cache: PortfolioHistoryCache | None = None,
 ) -> Decimal:
     if _is_current_portfolio_date(as_of_date):
         return product.current_value_usd or Decimal('0')
-    rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
+    if portfolio_cache is not None:
+        rate = _usd_rate_from_cache(
+            product.currency,
+            as_of_date,
+            rate_cache,
+            portfolio_cache.exchange_rates_by_code,
+        )
+    else:
+        rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
     if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
+        if portfolio_cache is not None:
+            native_value = _balance_snapshot_as_of(
+                portfolio_cache.product_snapshots.get(product.id, []),
+                as_of_date,
+                reconstruct_insurance_product_value_native(
+                    (transaction_map or portfolio_cache.transaction_map).get(product.id, []),
+                    as_of_date,
+                    product_type=product.product_type,
+                ),
+            )
+        else:
+            snapshot = (
+                product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
+                .order_by('-captured_at', '-id')
+                .first()
+            )
+            transactions = (transaction_map or {}).get(product.id, [])
+            if snapshot:
+                native_value = snapshot.balance
+            else:
+                native_value = reconstruct_insurance_product_value_native(
+                    transactions,
+                    as_of_date,
+                    product_type=product.product_type,
+                )
+        return native_value * rate
+
+    if portfolio_cache is not None:
+        units = _balance_snapshot_as_of(
+            portfolio_cache.product_snapshots.get(product.id, []),
+            as_of_date,
+            product.units or Decimal('0'),
+        )
+    else:
         snapshot = (
             product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
             .order_by('-captured_at', '-id')
             .first()
         )
-        transactions = (transaction_map or {}).get(product.id, [])
-        if snapshot:
-            native_value = snapshot.balance
-        else:
-            native_value = reconstruct_insurance_product_value_native(
-                transactions,
-                as_of_date,
-                product_type=product.product_type,
-            )
-        return native_value * rate
-
-    snapshot = (
-        product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
-        .order_by('-captured_at', '-id')
-        .first()
-    )
-    if snapshot:
-        units = snapshot.balance
-    else:
-        units = product.units or Decimal('0')
+        units = snapshot.balance if snapshot else (product.units or Decimal('0'))
     return _product_market_value_native(product, units=units) * rate
 
 
-def _historical_portfolio_context(as_of_date):
+def _historical_portfolio_context(
+    as_of_date,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+):
+    portfolio_cache = portfolio_cache or PortfolioHistoryCache.build()
     rate_cache: dict[tuple[str, str], Decimal] = {}
     institution_rows = []
     account_rows = []
@@ -270,18 +421,9 @@ def _historical_portfolio_context(as_of_date):
     total_accounts_usd = Decimal('0')
     total_products_usd = Decimal('0')
 
-    accounts = list(Account.objects.select_related('institution', 'currency').all())
-    products = list(Product.objects.select_related('institution', 'currency').all())
-    insurance_product_ids = [
-        product.id
-        for product in products
-        if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE)
-    ]
-    transaction_map = build_product_transaction_map(insurance_product_ids)
-
     institution_map: dict[int, dict] = {}
-    for account in accounts:
-        value_usd = _account_value_as_of(account, as_of_date, rate_cache)
+    for account in portfolio_cache.accounts:
+        value_usd = _account_value_as_of(account, as_of_date, rate_cache, portfolio_cache=portfolio_cache)
         total_accounts_usd += value_usd
         account_rows.append({'account': account, 'value_usd': value_usd})
         bucket = institution_map.setdefault(
@@ -290,8 +432,14 @@ def _historical_portfolio_context(as_of_date):
         )
         bucket['accounts_usd'] += value_usd
 
-    for product in products:
-        value_usd = _product_value_as_of(product, as_of_date, rate_cache, transaction_map=transaction_map)
+    for product in portfolio_cache.products:
+        value_usd = _product_value_as_of(
+            product,
+            as_of_date,
+            rate_cache,
+            transaction_map=portfolio_cache.transaction_map,
+            portfolio_cache=portfolio_cache,
+        )
         total_products_usd += value_usd
         product_rows.append({'product': product, 'value_usd': value_usd})
         bucket = institution_map.setdefault(
@@ -308,7 +456,19 @@ def _historical_portfolio_context(as_of_date):
     account_rows.sort(key=lambda row: row['value_usd'], reverse=True)
     product_rows.sort(key=lambda row: row['value_usd'], reverse=True)
 
-    latest_snapshot = BalanceSnapshot.objects.filter(captured_at__date__lte=as_of_date).order_by('-captured_at').first()
+    latest_snapshot = None
+    for snapshots in portfolio_cache.account_snapshots.values():
+        for snapshot in snapshots:
+            if snapshot.captured_at.date() <= as_of_date and (
+                latest_snapshot is None or snapshot.captured_at > latest_snapshot.captured_at
+            ):
+                latest_snapshot = snapshot
+    for snapshots in portfolio_cache.product_snapshots.values():
+        for snapshot in snapshots:
+            if snapshot.captured_at.date() <= as_of_date and (
+                latest_snapshot is None or snapshot.captured_at > latest_snapshot.captured_at
+            ):
+                latest_snapshot = snapshot
     return {
         'as_of_date': as_of_date,
         'institution_rows': institution_rows,
@@ -323,13 +483,19 @@ def _historical_portfolio_context(as_of_date):
 
 def dashboard_home(request):
     as_of_date = timezone.localdate()
-    historical_report = _historical_portfolio_context(as_of_date)
+    portfolio_cache = PortfolioHistoryCache.build()
+    historical_report = _historical_portfolio_context(as_of_date, portfolio_cache=portfolio_cache)
     products = list(Product.objects.select_related('institution', 'currency').filter(is_active=True).order_by('institution__name', 'currency__code', 'name'))
     product_transaction_map = build_product_transaction_map([product.id for product in products])
     metrics = _dashboard_metrics()
     context = {
         'metrics': metrics,
-        **_portfolio_chart_context(request.GET.get('range'), request.GET.get('mode'), as_of_date),
+        **_portfolio_chart_context(
+            request.GET.get('range'),
+            request.GET.get('mode'),
+            as_of_date,
+            portfolio_cache=portfolio_cache,
+        ),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
         'accounts': visible_account_queryset().order_by('name')[:8],
         'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=as_of_date),
@@ -339,7 +505,11 @@ def dashboard_home(request):
         'latest_rate_cards': _latest_rate_cards(),
         'historical_reporting': {
             **historical_report,
-            'period_comparisons': _build_portfolio_period_comparisons(as_of_date, historical_report),
+            'period_comparisons': _build_portfolio_period_comparisons(
+                as_of_date,
+                historical_report,
+                portfolio_cache=portfolio_cache,
+            ),
         },
     }
     return render(request, 'dashboard/index.html', context)
@@ -439,6 +609,11 @@ def portfolio_report(request):
     except ValueError:
         as_of_date = timezone.localdate()
 
-    context = _historical_portfolio_context(as_of_date)
-    context['period_comparisons'] = _build_portfolio_period_comparisons(as_of_date, context)
+    portfolio_cache = PortfolioHistoryCache.build()
+    context = _historical_portfolio_context(as_of_date, portfolio_cache=portfolio_cache)
+    context['period_comparisons'] = _build_portfolio_period_comparisons(
+        as_of_date,
+        context,
+        portfolio_cache=portfolio_cache,
+    )
     return render(request, 'dashboard/portfolio_report.html', context)

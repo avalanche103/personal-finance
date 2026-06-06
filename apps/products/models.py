@@ -18,6 +18,7 @@ class Product(TimeStampedModel):
 		OTHER = 'other', 'Other'
 
 	class IncomeSchedule(models.TextChoices):
+		TWICE_MONTHLY = 'twice_monthly', 'Twice monthly (2× per month)'
 		MONTHLY = 'monthly', 'Monthly'
 		QUARTERLY = 'quarterly', 'Quarterly'
 		SEMI_ANNUAL = 'semi_annual', 'Semi-annual'

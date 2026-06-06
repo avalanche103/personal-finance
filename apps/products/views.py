@@ -23,7 +23,7 @@ from apps.common.services.indexed_bonds import (
     build_product_income_calendar,
     save_income_calendar_config,
 )
-from apps.products.forms import ProductIncomeCalendarForm, ProductTokenTermsForm
+from apps.products.forms import ProductDepositTermsForm, ProductForm, ProductIncomeCalendarForm, ProductTokenTermsForm
 from apps.products.models import Product
 from apps.products.services.token_terms import estimate_next_income_date, income_payment_dates
 
@@ -191,6 +191,26 @@ def product_list(request):
     return render(request, template_name, context)
 
 
+def product_create(request):
+    form = ProductForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        product = form.save()
+        messages.success(request, f'Product "{product.name}" created.')
+        return redirect('products:detail', pk=product.pk)
+
+    return render(
+        request,
+        'products/form.html',
+        {
+            'form': form,
+            'title': 'Add product',
+            'eyebrow': 'Assets',
+            'submit_label': 'Create product',
+            'back_url': 'products:list',
+        },
+    )
+
+
 TOKEN_TERMS_UPDATE_FIELDS = (
     'annual_rate_pct',
     'maturity_date',
@@ -198,6 +218,11 @@ TOKEN_TERMS_UPDATE_FIELDS = (
     'next_income_date',
     'terms_updated_at',
     'updated_at',
+)
+
+DEPOSIT_TERMS_UPDATE_FIELDS = TOKEN_TERMS_UPDATE_FIELDS + (
+    'income_account',
+    'metadata',
 )
 
 
@@ -233,6 +258,7 @@ def _build_product_detail_context(product: Product) -> dict:
 
     pension_summary = None
     life_insurance_summary = None
+    deposit_summary = None
     if product.product_type == Product.ProductType.PENSION:
         metadata = product.metadata if isinstance(product.metadata, dict) else {}
         pension_summary = {
@@ -256,6 +282,20 @@ def _build_product_detail_context(product: Product) -> dict:
             'guaranteed_yield_pct': metadata.get('guaranteed_yield_pct'),
             'future_payments_total': metadata.get('future_payments_total'),
         }
+    elif product.product_type == Product.ProductType.DEPOSIT:
+        metadata = product.metadata if isinstance(product.metadata, dict) else {}
+        deposit_summary = {
+            'principal': product.market_value,
+            'principal_usd': product.current_value_usd or Decimal('0'),
+            'interest_income': position_summary['passive_income'],
+            'interest_income_usd': position_summary['passive_income_usd'],
+            'capitalized_interest': position_summary.get('capitalized_income', Decimal('0')),
+            'capitalized_interest_usd': position_summary.get('capitalized_income_usd', Decimal('0')),
+            'interest_mode': metadata.get('interest_mode', ''),
+            'contract_number': metadata.get('contract_number', ''),
+            'opened_at': metadata.get('opened_at', ''),
+            'auto_renewal': metadata.get('auto_renewal', ''),
+        }
 
     return {
         'product': product,
@@ -267,6 +307,7 @@ def _build_product_detail_context(product: Product) -> dict:
         'performance_summary': performance_summary,
         'pension_summary': pension_summary,
         'life_insurance_summary': life_insurance_summary,
+        'deposit_summary': deposit_summary,
     }
 
 
@@ -276,7 +317,11 @@ def product_detail(request, pk):
         Product.objects.select_related('institution', 'currency', 'income_account', 'income_account__institution'),
         pk=pk,
     )
-    terms_form = ProductTokenTermsForm(instance=product)
+    terms_form = (
+        ProductDepositTermsForm(instance=product)
+        if product.product_type == Product.ProductType.DEPOSIT
+        else ProductTokenTermsForm(instance=product)
+    )
     income_calendar_form = ProductIncomeCalendarForm(product=product)
 
     if request.method == 'POST':
@@ -319,17 +364,26 @@ def product_detail(request, pk):
             url = reverse('products:detail', args=[product.pk])
             return redirect(f'{url}?{urlencode(query)}' if query else url)
 
-        terms_form = ProductTokenTermsForm(request.POST, instance=product)
+        terms_form = (
+            ProductDepositTermsForm(request.POST, instance=product)
+            if product.product_type == Product.ProductType.DEPOSIT
+            else ProductTokenTermsForm(request.POST, instance=product)
+        )
         if terms_form.is_valid():
-            updated_product = terms_form.save(commit=False)
-            updated_product.terms_updated_at = timezone.now()
-            updated_product.save(update_fields=list(TOKEN_TERMS_UPDATE_FIELDS))
-            messages.success(request, 'Token terms saved.')
+            if product.product_type == Product.ProductType.DEPOSIT:
+                updated_product = terms_form.save(commit=False)
+                updated_product.terms_updated_at = timezone.now()
+                updated_product.save(update_fields=list(DEPOSIT_TERMS_UPDATE_FIELDS) + ['terms_updated_at'])
+            else:
+                updated_product = terms_form.save(commit=False)
+                updated_product.terms_updated_at = timezone.now()
+                updated_product.save(update_fields=list(TOKEN_TERMS_UPDATE_FIELDS))
+            messages.success(request, 'Income terms saved.')
             query = _product_list_nav_params(request)
             url = reverse('products:detail', args=[product.pk])
             return redirect(f'{url}?{urlencode(query)}' if query else url)
 
-        messages.error(request, 'Could not save token terms. Please fix the errors below.')
+        messages.error(request, 'Could not save income terms. Please fix the errors below.')
 
     context = _build_product_detail_context(product)
     context['terms_form'] = terms_form

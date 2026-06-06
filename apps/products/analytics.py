@@ -106,6 +106,20 @@ def _resolve_market_value_usd(position_summary: dict) -> Decimal:
     return market_value_usd
 
 
+def _is_capitalized_deposit_income(transaction: Transaction) -> bool:
+    if transaction.transaction_type != Transaction.TransactionType.INCOME:
+        return False
+    metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+    return str(metadata.get('interest_mode', '')).strip().casefold() == 'capitalized'
+
+
+def _transaction_quantity_or_amount(transaction: Transaction) -> Decimal:
+    quantity = transaction.quantity or Decimal('0')
+    if quantity:
+        return abs(quantity)
+    return abs(transaction.amount or Decimal('0'))
+
+
 def build_product_position_summary(
     transactions,
     market_value: Decimal,
@@ -120,14 +134,40 @@ def build_product_position_summary(
     purchase_cost = Decimal('0')
     returned_cash = Decimal('0')
     passive_income = Decimal('0')
+    capitalized_income = Decimal('0')
     purchase_cost_usd = Decimal('0')
     returned_cash_usd = Decimal('0')
     passive_income_usd = Decimal('0')
+    capitalized_income_usd = Decimal('0')
 
     for transaction in transactions:
         quantity = transaction.quantity or Decimal('0')
         amount = transaction.amount or Decimal('0')
         amount_usd = _resolve_amount_usd(transaction)
+        if product_type == Product.ProductType.DEPOSIT:
+            if transaction.transaction_type == Transaction.TransactionType.DEPOSIT:
+                principal = _transaction_quantity_or_amount(transaction)
+                bought_units += principal
+                purchase_cost += abs(amount)
+                purchase_cost_usd += abs(amount_usd)
+                continue
+            if transaction.transaction_type == Transaction.TransactionType.INCOME:
+                income = abs(amount)
+                income_usd = abs(amount_usd)
+                passive_income += income
+                passive_income_usd += income_usd
+                if _is_capitalized_deposit_income(transaction):
+                    capitalized_income += income
+                    capitalized_income_usd += income_usd
+                continue
+            if transaction.transaction_type in (
+                Transaction.TransactionType.WITHDRAWAL,
+                Transaction.TransactionType.TRANSFER,
+            ) or quantity < 0:
+                redeemed_units += abs(quantity) if quantity else abs(amount)
+                returned_cash += abs(amount)
+                returned_cash_usd += abs(amount_usd)
+                continue
         if (
             product_type == Product.ProductType.PENSION
             and transaction.transaction_type == Transaction.TransactionType.DEPOSIT
@@ -169,6 +209,9 @@ def build_product_position_summary(
     open_units = max(sum((transaction.quantity or Decimal('0')) for transaction in transactions), Decimal('0'))
     open_cost_basis = avg_entry_price * open_units
     open_cost_basis_usd = purchase_cost_usd / bought_units * open_units if bought_units else Decimal('0')
+    if product_type == Product.ProductType.DEPOSIT:
+        open_cost_basis = max(purchase_cost - returned_cash, Decimal('0'))
+        open_cost_basis_usd = max(purchase_cost_usd - returned_cash_usd, Decimal('0'))
     market_value_usd = market_value_usd if market_value_usd is not None else Decimal('0')
 
     employer_subsidy = Decimal('0')
@@ -197,6 +240,8 @@ def build_product_position_summary(
         'returned_cash_usd': returned_cash_usd,
         'passive_income': passive_income,
         'passive_income_usd': passive_income_usd,
+        'capitalized_income': capitalized_income,
+        'capitalized_income_usd': capitalized_income_usd,
         'avg_entry_price': avg_entry_price,
         'open_cost_basis': open_cost_basis,
         'open_cost_basis_usd': open_cost_basis_usd,
@@ -284,6 +329,22 @@ def build_performance_cash_flows(
             for tx in transactions
             if tx.transaction_type == Transaction.TransactionType.DEPOSIT and (tx.amount or tx.amount_usd)
         ]
+    elif product_type == Product.ProductType.DEPOSIT:
+        cash_flows = []
+        for tx in transactions:
+            amount_usd = _resolve_amount_usd(tx)
+            if not amount_usd:
+                continue
+            if tx.transaction_type == Transaction.TransactionType.DEPOSIT:
+                cash_flows.append((tx.occurred_at.date(), -abs(amount_usd)))
+            elif tx.transaction_type == Transaction.TransactionType.INCOME:
+                if not _is_capitalized_deposit_income(tx):
+                    cash_flows.append((tx.occurred_at.date(), abs(amount_usd)))
+            elif tx.transaction_type in (
+                Transaction.TransactionType.WITHDRAWAL,
+                Transaction.TransactionType.TRANSFER,
+            ):
+                cash_flows.append((tx.occurred_at.date(), abs(amount_usd)))
     else:
         cash_flows = [
             (tx.occurred_at.date(), _resolve_amount_usd(tx))
@@ -305,9 +366,12 @@ def build_product_performance_summary(
 ):
     purchase_cost_usd = position_summary['purchase_cost_usd']
     market_value_usd = _resolve_market_value_usd(position_summary)
+    passive_income_usd = position_summary['passive_income_usd']
+    if product_type == Product.ProductType.DEPOSIT:
+        passive_income_usd -= position_summary.get('capitalized_income_usd', Decimal('0'))
     total_return_value = (
         position_summary['returned_cash_usd']
-        + position_summary['passive_income_usd']
+        + passive_income_usd
         + market_value_usd
         - purchase_cost_usd
     )
@@ -471,6 +535,11 @@ def extract_product_issuer(product) -> str:
         if institution_name:
             return normalize_issuer_label(institution_name)
 
+    if product.product_type == Product.ProductType.DEPOSIT:
+        institution_name = str(getattr(product.institution, 'name', '') or '').strip()
+        if institution_name:
+            return normalize_issuer_label(institution_name)
+
     if product.product_type == Product.ProductType.CRYPTO:
         asset = str(metadata.get('asset', '') or product.symbol or product.name or '').strip()
         if asset:
@@ -551,6 +620,7 @@ def build_portfolio_allocation(products, *, instrument_type: str | None = None) 
             Product.ProductType.CRYPTO,
             Product.ProductType.PENSION,
             Product.ProductType.LIFE_INSURANCE,
+            Product.ProductType.DEPOSIT,
         ):
             by_issuer[extract_product_issuer(product)] += value_usd
 

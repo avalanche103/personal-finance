@@ -1,0 +1,56 @@
+{% extends 'core/base.html' %}
+
+{% block title %}{{ title }} | {{ project_name }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">{{ eyebrow }}</p>
+            <h2>{{ title }}</h2>
+        </div>
+        <a class="button button-secondary" href="{% url back_url %}">Back to products</a>
+    </div>
+
+    <form method="post" class="stack-md">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="message error">{{ form.non_field_errors }}</div>
+        {% endif %}
+        <div class="filter-bar">
+            {% for field in form %}
+                <label class="filter-field">
+                    <span>{{ field.label }}</span>
+                    {{ field }}
+                    {% if field.help_text %}<small class="muted">{{ field.help_text }}</small>{% endif %}
+                    {% for error in field.errors %}
+                        <small class="message error">{{ error }}</small>
+                    {% endfor %}
+                </label>
+            {% endfor %}
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="button">{{ submit_label }}</button>
+            <a class="button button-secondary" href="{% url back_url %}">Cancel</a>
+        </div>
+    </form>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    const productType = document.getElementById('id_product_type');
+    const interestModeField = document.getElementById('id_interest_mode')?.closest('.filter-field');
+    if (!productType || !interestModeField) {
+        return;
+    }
+    const toggleDepositFields = () => {
+        interestModeField.style.display = productType.value === 'deposit' ? '' : 'none';
+    };
+    productType.addEventListener('change', toggleDepositFields);
+    toggleDepositFields();
+})();
+</script>
+{% endblock %}

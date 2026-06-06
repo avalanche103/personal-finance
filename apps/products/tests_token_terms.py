@@ -107,6 +107,25 @@ class TokenTermsServiceTests(TestCase):
 		dates = [date(2026, 2, 20), date(2026, 3, 20), date(2026, 4, 20)]
 		self.assertEqual(infer_schedule_from_payment_dates(dates), Product.IncomeSchedule.MONTHLY)
 
+	def test_infer_twice_monthly_schedule_from_payment_gaps(self):
+		dates = [date(2026, 2, 1), date(2026, 2, 16), date(2026, 3, 1)]
+		self.assertEqual(infer_schedule_from_payment_dates(dates), Product.IncomeSchedule.TWICE_MONTHLY)
+
+	def test_twice_monthly_income_amount_uses_24_periods(self):
+		from apps.products.services.token_terms import schedule_payments_per_year
+
+		self.product.annual_rate_pct = Decimal('12')
+		self.product.units = Decimal('1000')
+		self.product.current_price = Decimal('1')
+		self.product.current_value_usd = Decimal('1000')
+		self.product.income_schedule = Product.IncomeSchedule.TWICE_MONTHLY
+		self.product.save()
+
+		self.assertEqual(schedule_payments_per_year(Product.IncomeSchedule.TWICE_MONTHLY), 24)
+		amount, amount_usd = estimate_next_income_amount(self.product, payment_dates=[])
+		self.assertEqual(amount, Decimal('5.00'))
+		self.assertEqual(amount_usd, Decimal('5.00'))
+
 	def test_forecast_without_preset_schedule(self):
 		Transaction.objects.create(
 			account=self.account,

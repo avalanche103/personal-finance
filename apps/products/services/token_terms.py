@@ -19,6 +19,12 @@ from apps.products.models import Product
 FINSTORE_INCOME_OPERATION = 'Получение дохода'
 
 INCOME_SCHEDULE_ALIASES = {
+	'twice_monthly': Product.IncomeSchedule.TWICE_MONTHLY,
+	'2x_monthly': Product.IncomeSchedule.TWICE_MONTHLY,
+	'semi_monthly': Product.IncomeSchedule.TWICE_MONTHLY,
+	'2 times per month': Product.IncomeSchedule.TWICE_MONTHLY,
+	'2 раза в месяц': Product.IncomeSchedule.TWICE_MONTHLY,
+	'два раза в месяц': Product.IncomeSchedule.TWICE_MONTHLY,
 	'monthly': Product.IncomeSchedule.MONTHLY,
 	'ежемесячно': Product.IncomeSchedule.MONTHLY,
 	'ежемесячная': Product.IncomeSchedule.MONTHLY,
@@ -259,6 +265,7 @@ def schedule_month_delta(schedule: str) -> int | None:
 
 def schedule_payments_per_year(schedule: str) -> int | None:
 	return {
+		Product.IncomeSchedule.TWICE_MONTHLY: 24,
 		Product.IncomeSchedule.MONTHLY: 12,
 		Product.IncomeSchedule.QUARTERLY: 4,
 		Product.IncomeSchedule.SEMI_ANNUAL: 2,
@@ -358,6 +365,8 @@ def infer_schedule_from_payment_dates(dates: list[date]) -> str:
 		return ''
 
 	median_gap = int(median(gaps))
+	if 12 <= median_gap <= 18:
+		return Product.IncomeSchedule.TWICE_MONTHLY
 	if 25 <= median_gap <= 38:
 		return Product.IncomeSchedule.MONTHLY
 	if 80 <= median_gap <= 100:
@@ -430,6 +439,9 @@ def estimate_next_income_date(product: Product, *, today: date | None = None) ->
 		if product.maturity_date and product.maturity_date >= reference:
 			return product.maturity_date
 		return None
+
+	if schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+		return _advance_by_gap(last_payment, 15, typical_day, reference)
 
 	month_delta = schedule_month_delta(schedule)
 	if month_delta is not None:

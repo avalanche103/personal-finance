@@ -1,9 +1,10 @@
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.accounts.models import Account
+from apps.accounts.models import Account, Transaction
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
 
@@ -77,3 +78,65 @@ class AccountViewsTests(TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]['label'], 'Finstore')
         self.assertEqual(len(groups[0]['accounts']), 2)
+
+    def test_account_create_uses_common_ui_not_admin(self):
+        response = self.client.post(
+            reverse('accounts:create'),
+            {
+                'institution': self.alfa.pk,
+                'name': 'Savings account',
+                'account_type': Account.AccountType.BANK,
+                'currency': self.usd.pk,
+                'external_id': 'SAV-1',
+                'current_balance': '125.50',
+                'metadata': '{}',
+                'is_active': 'on',
+            },
+        )
+
+        self.assertRedirects(response, reverse('accounts:list'))
+        account = Account.objects.get(external_id='SAV-1')
+        self.assertEqual(account.current_balance, Decimal('125.50'))
+        self.assertEqual(account.current_balance_usd, Decimal('125.500000'))
+
+        list_response = self.client.get(reverse('accounts:list'))
+        self.assertContains(list_response, reverse('accounts:create'))
+        self.assertContains(list_response, reverse('accounts:transaction_create'))
+        self.assertNotContains(list_response, '/admin/accounts/account/add/')
+
+    def test_transaction_create_generates_fingerprint_and_syncs_balance(self):
+        account = Account.objects.get(name='Checking')
+        response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': account.pk,
+                'related_account': '',
+                'product': '',
+                'transaction_type': Transaction.TransactionType.INCOME,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '10.00',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-06T12:00',
+                'description': 'Manual interest',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, reverse('accounts:list'))
+        transaction = Transaction.objects.get(description='Manual interest')
+        self.assertTrue(transaction.import_fingerprint.startswith('manual:'))
+        self.assertEqual(transaction.amount_usd, Decimal('3.10'))
+        account.refresh_from_db()
+        self.assertEqual(account.current_balance, Decimal('10.00'))
+
+    def test_admin_add_is_disabled_for_accounts_and_transactions(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_superuser('admin', 'admin@example.com', 'password')
+        self.client.force_login(user)
+
+        response = self.client.get('/admin/accounts/account/add/')
+        self.assertEqual(response.status_code, 403)
+        response = self.client.get('/admin/accounts/transaction/add/')
+        self.assertEqual(response.status_code, 403)

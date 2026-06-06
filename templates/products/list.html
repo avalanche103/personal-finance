@@ -10,7 +10,7 @@
             <p class="eyebrow">Assets</p>
             <h2>Products list</h2>
         </div>
-        <a class="button" href="/admin/products/product/add/">Add product</a>
+        <a class="button" href="{% url 'products:create' %}">Add product</a>
     </div>
 
     <form id="product-filters" class="filter-bar" hx-get="{% url 'products:list' %}" hx-target="#product-table" hx-trigger="keyup changed delay:300ms from:#product-search, change from:#show-closed-products">

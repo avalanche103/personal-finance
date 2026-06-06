@@ -48,18 +48,20 @@
                 {% endif %}
             </div>
             <div class="info-card">
-                <span>Units</span>
-                <strong>{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ product.units|floatformat:6 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</strong>
+                <span>{% if product.product_type == 'deposit' %}Principal{% else %}Units{% endif %}</span>
+                <strong>{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ product.units|floatformat:6 }}{% elif product.product_type == 'deposit' %}{{ product.market_value|floatformat:2 }} {{ product.currency.code }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</strong>
             </div>
-            <div class="info-card">
-                <span>Current price</span>
-                <strong>{{ product.current_price|floatformat:2 }} {{ product.currency.code }}</strong>
-            </div>
+            {% if product.product_type != 'deposit' %}
+                <div class="info-card">
+                    <span>Current price</span>
+                    <strong>{{ product.current_price|floatformat:2 }} {{ product.currency.code }}</strong>
+                </div>
+            {% endif %}
             <div class="info-card">
                 <span>Transactions</span>
                 <strong>{{ transaction_count }}</strong>
             </div>
-            {% if product.product_type != 'pension' and product.product_type != 'life_insurance' %}
+            {% if product.product_type != 'pension' and product.product_type != 'life_insurance' and product.product_type != 'deposit' %}
                 <div class="info-card">
                     <span>Open units</span>
                     <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.open_units|floatformat:6 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
@@ -93,6 +95,18 @@
                     <strong>{{ life_insurance_summary.accrued_yield_in_account|floatformat:2 }} {{ product.currency.code }}</strong>
                 </div>
             {% endif %}
+            {% if product.product_type == 'deposit' and deposit_summary %}
+                <div class="info-card">
+                    <span>Interest income</span>
+                    <strong>{{ deposit_summary.interest_income_usd|floatformat:2 }} USD</strong>
+                    <small class="muted">{{ deposit_summary.interest_income|floatformat:2 }} {{ product.currency.code }}</small>
+                </div>
+                <div class="info-card">
+                    <span>Capitalized interest</span>
+                    <strong>{{ deposit_summary.capitalized_interest_usd|floatformat:2 }} USD</strong>
+                    <small class="muted">{{ deposit_summary.capitalized_interest|floatformat:2 }} {{ product.currency.code }}</small>
+                </div>
+            {% endif %}
             <div class="info-card">
                 <span>Unrealized P&amp;L</span>
                 <strong>{{ position_summary.unrealized_pnl_usd|floatformat:2 }} USD</strong>
@@ -101,10 +115,12 @@
                 <span>Returned cash</span>
                 <strong>{{ position_summary.returned_cash_usd|floatformat:2 }} USD</strong>
             </div>
-            <div class="info-card">
-                <span>Passive income</span>
-                <strong>{{ position_summary.passive_income_usd|floatformat:2 }} USD</strong>
-            </div>
+            {% if product.product_type != 'deposit' %}
+                <div class="info-card">
+                    <span>Passive income</span>
+                    <strong>{{ position_summary.passive_income_usd|floatformat:2 }} USD</strong>
+                </div>
+            {% endif %}
             <div class="info-card">
                 <span>Open cost basis</span>
                 <strong>{{ position_summary.open_cost_basis_usd|floatformat:2 }} USD</strong>
@@ -134,13 +150,19 @@
             <div class="meta-list">
                 <div class="meta-item"><strong>Institution</strong><div class="muted">{{ product.institution.name }}</div></div>
                 <div class="meta-item"><strong>Type</strong><div class="muted">{{ product.get_product_type_display }}{% if product.bond_kind_display %} · {{ product.bond_kind_display }}{% endif %}</div></div>
-                <div class="meta-item"><strong>Coupon account</strong><div class="muted">{% if product.income_account %}{{ product.income_account.institution.name }} · {{ product.income_account.name }}{% else %}-{% endif %}</div></div>
+                <div class="meta-item"><strong>{% if product.product_type == 'deposit' %}Interest account{% else %}Coupon account{% endif %}</strong><div class="muted">{% if product.income_account %}{{ product.income_account.institution.name }} · {{ product.income_account.name }}{% else %}-{% endif %}</div></div>
                 {% if product.metadata.face_value_usd %}
                     <div class="meta-item"><strong>Face value (USD)</strong><div class="muted font-mono">{{ product.metadata.face_value_usd }} USD{% if product.metadata.face_value_byn %} · {{ product.metadata.face_value_byn }} BYN @ {{ product.metadata.placement_fx_rate }}{% endif %}</div></div>
                 {% endif %}
                 <div class="meta-item"><strong>Currency</strong><div class="muted">{{ product.currency.code }} · {{ product.currency.name }}</div></div>
-                <div class="meta-item"><strong>Bought units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.bought_units|floatformat:6 }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
-                <div class="meta-item"><strong>Redeemed units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.redeemed_units|floatformat:6 }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
+                <div class="meta-item"><strong>{% if product.product_type == 'deposit' %}Deposited principal{% else %}Bought units{% endif %}</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.bought_units|floatformat:6 }}{% elif product.product_type == 'deposit' %}{{ position_summary.bought_units|floatformat:2 }} {{ product.currency.code }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
+                <div class="meta-item"><strong>{% if product.product_type == 'deposit' %}Withdrawn principal{% else %}Redeemed units{% endif %}</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.redeemed_units|floatformat:6 }}{% elif product.product_type == 'deposit' %}{{ position_summary.redeemed_units|floatformat:2 }} {{ product.currency.code }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
+                {% if product.product_type == 'deposit' and deposit_summary %}
+                    <div class="meta-item"><strong>Contract number</strong><div class="muted">{{ deposit_summary.contract_number|default:'-' }}</div></div>
+                    <div class="meta-item"><strong>Opened at</strong><div class="muted">{{ deposit_summary.opened_at|default:'-' }}</div></div>
+                    <div class="meta-item"><strong>Interest mode</strong><div class="muted">{{ deposit_summary.interest_mode|default:'-' }}</div></div>
+                    <div class="meta-item"><strong>Auto renewal</strong><div class="muted">{{ deposit_summary.auto_renewal|default:'-' }}</div></div>
+                {% endif %}
                 <div class="meta-item"><strong>Symbol</strong><div class="muted">{{ product.symbol|default:'-' }}</div></div>
                 <div class="meta-item"><strong>ISIN</strong><div class="muted">{{ product.isin|default:'-' }}</div></div>
                 <div class="meta-item"><strong>External ID</strong><div class="muted">{{ product.external_id|default:'-' }}</div></div>
@@ -163,6 +185,9 @@
                 {% elif product.product_type == 'bond' %}
                     <h2>Bond terms</h2>
                     <p class="muted">Rate, maturity, and income schedule for this product.</p>
+                {% elif product.product_type == 'deposit' %}
+                    <h2>Deposit terms</h2>
+                    <p class="muted">Contract rate, maturity, and interest payout or capitalization schedule.</p>
                 {% else %}
                     <h2>Token terms</h2>
                     <p class="muted">Rate, maturity, and income schedule for this product.</p>
@@ -173,6 +198,8 @@
                 {% include 'products/partials/pension_terms.html' %}
             {% elif product.product_type == 'life_insurance' %}
                 {% include 'products/partials/life_insurance_terms.html' %}
+            {% elif product.product_type == 'deposit' %}
+                {% include 'products/partials/deposit_terms_form.html' %}
             {% else %}
                 {% include 'products/partials/token_terms_form.html' %}
             {% endif %}

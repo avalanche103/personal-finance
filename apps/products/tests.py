@@ -1,6 +1,7 @@
 from decimal import Decimal
 from datetime import date, timedelta
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -10,6 +11,7 @@ from apps.common.models import Currency, ExchangeRateHistory
 from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import (
 	allocation_instrument_choices,
+	build_performance_cash_flows,
 	build_portfolio_allocation,
 	build_product_performance_summary,
 	build_product_position_summary,
@@ -17,6 +19,7 @@ from apps.products.analytics import (
 	reconstruct_insurance_product_value_native,
 )
 from apps.products.models import Product
+from apps.products.operations_calendar import build_operations_calendar
 
 
 class ProductViewsTests(TestCase):
@@ -510,6 +513,49 @@ class ProductViewsTests(TestCase):
 		self.assertEqual(response.context['portfolio_allocation']['instrument_type'], 'bond')
 		self.assertContains(response, 'within bonds')
 
+	def test_product_create_uses_common_ui_not_admin(self):
+		response = self.client.post(
+			reverse('products:create'),
+			{
+				'institution': self.other_institution.pk,
+				'income_account': self.account.pk,
+				'name': 'Manual deposit',
+				'symbol': '',
+				'isin': '',
+				'product_type': Product.ProductType.DEPOSIT,
+				'currency': self.usd.pk,
+				'income_account': self.account.pk,
+				'interest_mode': 'payout',
+				'units': '1000',
+				'current_price': '1',
+				'external_id': 'DEP-MANUAL',
+				'is_active': 'on',
+				'annual_rate_pct': '10',
+				'maturity_date': '2026-12-31',
+				'income_schedule': Product.IncomeSchedule.TWICE_MONTHLY,
+				'next_income_date': '',
+			},
+		)
+
+		product = Product.objects.get(external_id='DEP-MANUAL')
+		self.assertRedirects(response, reverse('products:detail', args=[product.pk]))
+		self.assertEqual(product.current_value_usd, Decimal('1000.00'))
+		self.assertEqual(product.metadata['interest_mode'], 'payout')
+		self.assertEqual(product.income_schedule, Product.IncomeSchedule.TWICE_MONTHLY)
+
+		list_response = self.client.get(reverse('products:list'))
+		self.assertContains(list_response, reverse('products:create'))
+		self.assertNotContains(list_response, '/admin/products/product/add/')
+
+	def test_admin_add_is_disabled_for_products(self):
+		user_model = get_user_model()
+		user = user_model.objects.create_superuser('admin', 'admin@example.com', 'password')
+		self.client.force_login(user)
+
+		response = self.client.get('/admin/products/product/add/')
+
+		self.assertEqual(response.status_code, 403)
+
 	def test_product_detail_navigates_between_products(self):
 		product_two = Product.objects.create(
 			institution=self.finstore,
@@ -566,9 +612,65 @@ class ProductViewsTests(TestCase):
 		self.assertIsNotNone(self.product_usd.terms_updated_at)
 
 		follow_up = self.client.get(reverse('products:detail', args=[self.product_usd.pk]))
-		self.assertContains(follow_up, 'Token terms')
+		self.assertContains(follow_up, 'Bond terms')
 		self.assertContains(follow_up, 'name="annual_rate_pct"')
 		self.assertContains(follow_up, '11.5')
+
+	def test_product_detail_shows_deposit_terms_and_summary(self):
+		deposit = Product.objects.create(
+			institution=self.other_institution,
+			name='BNB Deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=self.usd,
+			units=Decimal('1050'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('1050'),
+			income_account=self.account,
+			annual_rate_pct=Decimal('10'),
+			maturity_date=date(2026, 12, 31),
+			income_schedule=Product.IncomeSchedule.MONTHLY,
+			metadata={
+				'contract_number': 'DEP-1',
+				'opened_at': '2026-01-01',
+				'interest_mode': 'mixed',
+				'auto_renewal': False,
+			},
+		)
+		Transaction.objects.create(
+			account=self.account,
+			product=deposit,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			import_fingerprint='products-test-deposit-principal',
+			amount=Decimal('1000'),
+			amount_usd=Decimal('1000'),
+			quantity=Decimal('1000'),
+			unit_price=Decimal('1'),
+			occurred_at=timezone.now() - timedelta(days=30),
+		)
+		Transaction.objects.create(
+			account=self.account,
+			product=deposit,
+			transaction_type=Transaction.TransactionType.INCOME,
+			currency=self.usd,
+			import_fingerprint='products-test-deposit-capitalized',
+			amount=Decimal('50'),
+			amount_usd=Decimal('50'),
+			quantity=Decimal('50'),
+			unit_price=Decimal('1'),
+			occurred_at=timezone.now() - timedelta(days=1),
+			metadata={'interest_mode': 'capitalized'},
+		)
+
+		response = self.client.get(reverse('products:detail', args=[deposit.pk]))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Deposit terms')
+		self.assertContains(response, 'Principal')
+		self.assertContains(response, 'Interest account')
+		self.assertContains(response, 'Capitalized interest')
+		self.assertContains(response, 'DEP-1')
+		self.assertNotContains(response, 'Token terms')
 
 	def test_product_detail_shows_transactions_snapshots_and_rates(self):
 		occurred_at = timezone.now() - timedelta(days=1)
@@ -754,6 +856,145 @@ class ProductPositionSummaryTests(TestCase):
 		self.assertEqual(summary['purchase_cost'], Decimal('100'))
 		self.assertIsNotNone(performance['xirr'])
 		self.assertIsNotNone(performance['xirr_pct'])
+
+	def test_deposit_summary_tracks_payout_capitalization_and_withdrawal(self):
+		base_date = timezone.now() - timedelta(days=365)
+		transactions = [
+			Transaction(
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				amount=Decimal('1000'),
+				amount_usd=Decimal('1000'),
+				quantity=Decimal('1000'),
+				occurred_at=base_date,
+			),
+			Transaction(
+				transaction_type=Transaction.TransactionType.INCOME,
+				amount=Decimal('20'),
+				amount_usd=Decimal('20'),
+				quantity=Decimal('0'),
+				occurred_at=base_date + timedelta(days=90),
+			),
+			Transaction(
+				transaction_type=Transaction.TransactionType.INCOME,
+				amount=Decimal('50'),
+				amount_usd=Decimal('50'),
+				quantity=Decimal('50'),
+				occurred_at=base_date + timedelta(days=180),
+				metadata={'interest_mode': 'capitalized'},
+			),
+			Transaction(
+				transaction_type=Transaction.TransactionType.WITHDRAWAL,
+				amount=Decimal('200'),
+				amount_usd=Decimal('200'),
+				quantity=Decimal('-200'),
+				occurred_at=base_date + timedelta(days=270),
+			),
+		]
+
+		summary = build_product_position_summary(
+			transactions,
+			market_value=Decimal('850'),
+			market_value_usd=Decimal('850'),
+			product_type=Product.ProductType.DEPOSIT,
+		)
+		performance = build_product_performance_summary(
+			transactions,
+			summary,
+			as_of_date=timezone.localdate(),
+			product_type=Product.ProductType.DEPOSIT,
+		)
+		cash_flows = build_performance_cash_flows(
+			transactions,
+			product_type=Product.ProductType.DEPOSIT,
+			market_value_usd=Decimal('850'),
+			as_of_date=timezone.localdate(),
+		)
+
+		self.assertEqual(summary['purchase_cost'], Decimal('1000'))
+		self.assertEqual(summary['passive_income'], Decimal('70'))
+		self.assertEqual(summary['capitalized_income'], Decimal('50'))
+		self.assertEqual(summary['returned_cash'], Decimal('200'))
+		self.assertEqual(summary['open_units'], Decimal('850'))
+		self.assertEqual(summary['open_cost_basis'], Decimal('800'))
+		self.assertEqual(performance['total_return_value'], Decimal('70'))
+		self.assertNotIn((transactions[2].occurred_at.date(), Decimal('50')), cash_flows)
+		self.assertIsNotNone(performance['xirr'])
+
+	def test_closed_deposit_return_does_not_double_count_capitalized_interest(self):
+		transactions = [
+			Transaction(
+				transaction_type=Transaction.TransactionType.DEPOSIT,
+				amount=Decimal('1000'),
+				amount_usd=Decimal('1000'),
+				quantity=Decimal('1000'),
+				occurred_at=timezone.now() - timedelta(days=365),
+			),
+			Transaction(
+				transaction_type=Transaction.TransactionType.INCOME,
+				amount=Decimal('50'),
+				amount_usd=Decimal('50'),
+				quantity=Decimal('50'),
+				occurred_at=timezone.now() - timedelta(days=30),
+				metadata={'interest_mode': 'capitalized'},
+			),
+			Transaction(
+				transaction_type=Transaction.TransactionType.WITHDRAWAL,
+				amount=Decimal('1050'),
+				amount_usd=Decimal('1050'),
+				quantity=Decimal('-1050'),
+				occurred_at=timezone.now() - timedelta(days=1),
+			),
+		]
+
+		summary = build_product_position_summary(
+			transactions,
+			market_value=Decimal('0'),
+			market_value_usd=Decimal('0'),
+			product_type=Product.ProductType.DEPOSIT,
+		)
+		performance = build_product_performance_summary(
+			transactions,
+			summary,
+			as_of_date=timezone.localdate(),
+			product_type=Product.ProductType.DEPOSIT,
+		)
+
+		self.assertEqual(summary['passive_income'], Decimal('50'))
+		self.assertEqual(summary['capitalized_income'], Decimal('50'))
+		self.assertEqual(summary['returned_cash'], Decimal('1050'))
+		self.assertEqual(summary['open_units'], Decimal('0'))
+		self.assertEqual(performance['total_return_value'], Decimal('50'))
+
+	def test_operations_calendar_includes_deposit_maturity_and_interest(self):
+		today = date(2026, 6, 1)
+		maturity = date(2026, 6, 30)
+		institution = FinancialInstitution.objects.create(
+			name='Calendar Bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+		)
+		currency = Currency.objects.create(code='USD-CAL', name='Calendar USD', symbol='$', usd_rate=Decimal('1'))
+		deposit = Product.objects.create(
+			institution=institution,
+			name='Calendar deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=currency,
+			units=Decimal('1000'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('1000'),
+			annual_rate_pct=Decimal('10'),
+			maturity_date=maturity,
+			income_schedule=Product.IncomeSchedule.AT_MATURITY,
+			metadata={'opened_at': '2025-06-30'},
+		)
+
+		calendar = build_operations_calendar([deposit], today=today, future_days=60)
+
+		self.assertEqual(len(calendar), 1)
+		self.assertEqual(calendar[0]['date'], maturity)
+		events = calendar[0]['groups'][0]['events']
+		self.assertEqual([event['kind'] for event in events], ['maturity_forecast', 'income_forecast'])
+		self.assertEqual(events[0]['amount'], Decimal('1000.00'))
+		self.assertEqual(events[1]['amount'], Decimal('100.00'))
 
 	def test_life_insurance_xirr_uses_negative_premium_outflows(self):
 		account = Account.objects.create(

@@ -51,6 +51,9 @@ class ProductAdmin(admin.ModelAdmin):
 	)
 	readonly_fields = ('terms_updated_at',)
 
+	def has_add_permission(self, request):
+		return False
+
 	@admin.display(description='Units')
 	def formatted_units(self, obj):
 		if obj.product_type == Product.ProductType.TOKEN:
