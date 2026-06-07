@@ -19,7 +19,7 @@
                         {% include 'products/partials/sortable_th.html' with field='type' label='Type' next_dir=sort_next_dirs.type %}
                         {% include 'products/partials/sortable_th.html' with field='currency' label='Currency' next_dir=sort_next_dirs.currency %}
                         {% include 'products/partials/sortable_th.html' with field='units' label='Units' next_dir=sort_next_dirs.units align='right' %}
-                        {% if group.currency.code == 'BYN' %}
+                        {% if group.show_byn_column %}
                             {% include 'products/partials/sortable_th.html' with field='value_byn' label='Value BYN' next_dir=sort_next_dirs.value_byn align='right' %}
                         {% endif %}
                         {% include 'products/partials/sortable_th.html' with field='value_usd' label='Value USD' next_dir=sort_next_dirs.value_usd align='right' %}
@@ -37,8 +37,8 @@
                             <td>{{ product.get_product_type_display }}</td>
                             <td>{{ product.currency.code }}</td>
                             <td class="text-right">{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ product.units|floatformat:6 }}{% else %}{{ product.units|floatformat:2 }}{% endif %}{% if not product.is_active %}<div class="muted">Closed</div>{% endif %}</td>
-                            {% if group.currency.code == 'BYN' %}
-                                <td class="text-right">{{ product.market_value|floatformat:2 }}</td>
+                            {% if group.show_byn_column %}
+                                <td class="text-right">{% if product.currency.code == 'BYN' %}{{ product.market_value|floatformat:2 }}{% else %}<span class="muted">—</span>{% endif %}</td>
                             {% endif %}
                             <td class="text-right">{{ product.current_value_usd|floatformat:2 }}</td>
                             <td class="text-right font-mono">

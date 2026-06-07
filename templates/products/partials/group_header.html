@@ -1,6 +1,14 @@
 {% load institution_branding %}
 <div class="product-group-heading">
-    {% institution_logo group.institution %}
+    {% if group.is_deposit_group %}
+        <span
+            class="institution-logo institution-logo-fallback institution-logo-{{ size|default:'md' }}"
+            style="--institution-accent: #0D9488"
+            aria-hidden="true"
+        >DP</span>
+    {% else %}
+        {% institution_logo group.institution %}
+    {% endif %}
     <div class="product-group-title">
         <strong>{{ group.label }}</strong>
         <div class="muted{% if compact %} font-mono{% endif %}">{{ group.products|length }} {% if compact %}items{% else %}products{% endif %}</div>

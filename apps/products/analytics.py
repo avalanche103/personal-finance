@@ -18,13 +18,30 @@ TOKEN_ISSUER_ALT_PATTERN = re.compile(
     re.I,
 )
 
+DEPOSIT_GROUP_PREFIX = '__deposits__'
+DEPOSIT_GROUP_LABEL = 'Deposits'
+
+
+def is_deposit_group_key(group_key: tuple[str, str]) -> bool:
+    return group_key[0] == DEPOSIT_GROUP_PREFIX
+
 
 def product_group_label(institution_name: str, currency_code: str) -> str:
+    if institution_name == DEPOSIT_GROUP_PREFIX:
+        return DEPOSIT_GROUP_LABEL
     return f'{institution_name}_{currency_code}'
 
 
 def product_group_key(product) -> tuple[str, str]:
+    if product.product_type == Product.ProductType.DEPOSIT:
+        return DEPOSIT_GROUP_PREFIX, ''
     return product.institution.name, product.currency.code
+
+
+def allocation_institution_label(product) -> str:
+    if product.product_type == Product.ProductType.DEPOSIT:
+        return DEPOSIT_GROUP_LABEL
+    return product.institution.name
 
 
 def build_product_transaction_map(product_ids: list[int]) -> dict[int, list[Transaction]]:
@@ -450,10 +467,12 @@ def build_product_groups(
         )
 
         if group_key not in grouped:
+            is_deposit_group = is_deposit_group_key(group_key)
             grouped[group_key] = {
                 'label': product_group_label(*group_key),
-                'institution': product.institution,
+                'institution': None if is_deposit_group else product.institution,
                 'currency': product.currency,
+                'is_deposit_group': is_deposit_group,
                 'products': [],
                 'total_value_native': Decimal('0'),
                 'total_value_usd': Decimal('0'),
@@ -483,6 +502,9 @@ def build_product_groups(
         )
 
     for group in grouped.values():
+        currencies = {product.currency.code for product in group['products']}
+        group['has_single_currency'] = len(currencies) <= 1
+        group['show_byn_column'] = 'BYN' in currencies
         group['total_return_pct'] = (
             group['total_return_value'] / group['purchase_cost_usd'] * Decimal('100')
             if group['purchase_cost_usd']
@@ -612,7 +634,7 @@ def build_portfolio_allocation(products, *, instrument_type: str | None = None) 
     for product in scoped_products:
         value_usd = product.current_value_usd or Decimal('0')
         total_usd += value_usd
-        by_institution[product.institution.name] += value_usd
+        by_institution[allocation_institution_label(product)] += value_usd
         by_group[product_group_label(*product_group_key(product))] += value_usd
         if product.product_type in (
             Product.ProductType.TOKEN,

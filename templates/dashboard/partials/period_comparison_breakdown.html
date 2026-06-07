@@ -14,10 +14,18 @@
                 <tr>
                     <td>
                         <div class="period-comparison-row-label">
-                            {% institution_logo row.institution size='sm' %}
+                            {% if row.is_deposit_group %}
+                                <span
+                                    class="institution-logo institution-logo-fallback institution-logo-sm"
+                                    style="--institution-accent: #0D9488"
+                                    aria-hidden="true"
+                                >DP</span>
+                            {% else %}
+                                {% institution_logo row.institution size='sm' %}
+                            {% endif %}
                             <div>
                                 <strong>{{ row.label }}</strong>
-                                {% if show_currency and row.currency %}
+                                {% if show_currency and row.currency and not row.is_deposit_group %}
                                     <div class="muted">{{ row.currency.code }}</div>
                                 {% endif %}
                             </div>

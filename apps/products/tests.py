@@ -1118,3 +1118,85 @@ class ProductPositionSummaryTests(TestCase):
 		self.assertEqual(july_value, Decimal('28'))
 		self.assertEqual(august_value, Decimal('51'))
 		self.assertGreater(august_value, july_value)
+
+
+class DepositProductGroupTests(TestCase):
+	def setUp(self):
+		self.usd = Currency.objects.create(code='USD', name='US Dollar', symbol='$', usd_rate=Decimal('1'), is_base=True)
+		self.byn = Currency.objects.create(code='BYN', name='Belarusian Ruble', symbol='Br', usd_rate=Decimal('0.31'))
+		self.alfabank = FinancialInstitution.objects.create(
+			name='Alfabank',
+			slug='alfabank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+		)
+		self.belarusbank = FinancialInstitution.objects.create(
+			name='Belarusbank',
+			slug='belarusbank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+		)
+		self.deposit_byn = Product.objects.create(
+			institution=self.alfabank,
+			name='Alfa BYN deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=self.byn,
+			units=Decimal('10000'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('3100'),
+		)
+		self.deposit_usd = Product.objects.create(
+			institution=self.belarusbank,
+			name='Belarusbank USD deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=self.usd,
+			units=Decimal('5000'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('5000'),
+		)
+		self.token = Product.objects.create(
+			institution=self.alfabank,
+			name='Token',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('1'),
+			current_price=Decimal('100'),
+			current_value_usd=Decimal('100'),
+		)
+
+	def test_deposits_grouped_together(self):
+		from apps.products.analytics import build_product_groups, build_portfolio_allocation, product_group_key
+
+		products = [self.deposit_byn, self.deposit_usd, self.token]
+		groups = build_product_groups(products)
+		labels = [group['label'] for group in groups]
+
+		self.assertIn('Deposits', labels)
+		self.assertNotIn('Alfabank_BYN', labels)
+		self.assertNotIn('Belarusbank_USD', labels)
+		deposits_group = next(group for group in groups if group['label'] == 'Deposits')
+		self.assertTrue(deposits_group['is_deposit_group'])
+		self.assertIsNone(deposits_group['institution'])
+		self.assertEqual(len(deposits_group['products']), 2)
+		self.assertFalse(deposits_group['has_single_currency'])
+		self.assertTrue(deposits_group['show_byn_column'])
+		self.assertEqual(deposits_group['total_value_usd'], Decimal('8100'))
+		self.assertEqual(product_group_key(self.deposit_byn), product_group_key(self.deposit_usd))
+
+		allocation = build_portfolio_allocation(products)
+		group_labels = [row['label'] for row in allocation['by_group']]
+		self.assertIn('Deposits', group_labels)
+		deposits_row = next(row for row in allocation['by_group'] if row['label'] == 'Deposits')
+		self.assertEqual(deposits_row['value_usd'], Decimal('8100'))
+		institution_labels = [row['label'] for row in allocation['by_institution']]
+		self.assertIn('Deposits', institution_labels)
+		self.assertNotIn('Belarusbank', institution_labels)
+		deposits_institution = next(row for row in allocation['by_institution'] if row['label'] == 'Deposits')
+		self.assertEqual(deposits_institution['value_usd'], Decimal('8100'))
+
+	def test_product_list_shows_deposits_group(self):
+		response = self.client.get(reverse('products:list'))
+
+		self.assertEqual(response.status_code, 200)
+		labels = [group['label'] for group in response.context['product_groups']]
+		self.assertIn('Deposits', labels)
+		self.assertNotIn('Alfabank_BYN', labels)
+		self.assertContains(response, 'Deposits')

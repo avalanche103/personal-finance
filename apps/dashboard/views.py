@@ -24,6 +24,7 @@ from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import (
     build_product_groups,
     build_product_transaction_map,
+    is_deposit_group_key,
     product_group_key,
     product_group_label,
     reconstruct_insurance_product_value_native,
@@ -366,10 +367,12 @@ def _portfolio_product_group_values(
             portfolio_cache=portfolio_cache,
         )
         if group_key not in grouped:
+            is_deposit_group = is_deposit_group_key(group_key)
             grouped[group_key] = {
                 'label': product_group_label(*group_key),
-                'institution': product.institution,
+                'institution': None if is_deposit_group else product.institution,
                 'currency': product.currency,
+                'is_deposit_group': is_deposit_group,
                 'value_usd': Decimal('0'),
             }
         grouped[group_key]['value_usd'] += value_usd

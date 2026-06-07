@@ -170,7 +170,7 @@
                                     <tr>
                                         <th>Product</th>
                                         <th>Type</th>
-                                        {% if group.currency.code == 'BYN' %}
+                                        {% if group.show_byn_column %}
                                             <th class="text-right">BYN</th>
                                         {% endif %}
                                         <th class="text-right">USD</th>
@@ -181,8 +181,8 @@
                                         <tr>
                                             <td><a class="product-link" href="{% url 'products:detail' product.pk %}">{{ product.name }}</a></td>
                                             <td>{{ product.get_product_type_display }}</td>
-                                            {% if group.currency.code == 'BYN' %}
-                                                <td class="text-right font-mono">{{ product.market_value|floatformat:2 }}</td>
+                                            {% if group.show_byn_column %}
+                                                <td class="text-right font-mono">{% if product.currency.code == 'BYN' %}{{ product.market_value|floatformat:2 }}{% else %}<span class="muted">—</span>{% endif %}</td>
                                             {% endif %}
                                             <td class="text-right font-mono">{{ product.current_value_usd|floatformat:2 }}</td>
                                         </tr>
