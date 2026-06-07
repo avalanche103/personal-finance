@@ -30,6 +30,7 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
     --grid-gap: 12px;
     --content-padding: 20px;
+    --institution-logo-bg: #f3f4f6;
 }
 
 [data-theme='dark'] {
@@ -47,6 +48,7 @@
     --danger-soft: rgba(239, 68, 68, 0.16);
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --institution-logo-bg: #2a2a2a;
 }
 
 *,
@@ -858,19 +860,22 @@ button {
 /* Groups (products/accounts) */
 
 .product-group,
-.account-group {
+.account-group,
+.period-comparison {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
 }
 
 .product-group + .product-group,
-.account-group + .account-group {
+.account-group + .account-group,
+.period-comparison + .period-comparison {
     margin-top: var(--grid-gap);
 }
 
 .product-group summary,
-.account-group summary {
+.account-group summary,
+.period-comparison summary {
     list-style: none;
     cursor: pointer;
     padding: 0.65rem 0.85rem;
@@ -882,14 +887,109 @@ button {
     font-size: 0.8125rem;
 }
 
+.product-group-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+}
+
+.product-group-title {
+    min-width: 0;
+}
+
+.product-group-title strong {
+    display: block;
+    line-height: 1.25;
+}
+
+.institution-logo {
+    flex-shrink: 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--institution-logo-bg, #f3f4f6);
+    object-fit: contain;
+}
+
+.institution-logo-md {
+    width: 36px;
+    height: 36px;
+}
+
+.institution-logo-sm {
+    width: 28px;
+    height: 28px;
+}
+
+.institution-logo-fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #fff;
+    background: var(--institution-accent, var(--text-muted));
+}
+
 .product-group summary::-webkit-details-marker,
-.account-group summary::-webkit-details-marker {
+.account-group summary::-webkit-details-marker,
+.period-comparison summary::-webkit-details-marker {
     display: none;
 }
 
 .product-group[open] summary,
-.account-group[open] summary {
+.account-group[open] summary,
+.period-comparison[open] summary {
     border-bottom: 1px solid var(--border);
+}
+
+.period-comparison-heading strong {
+    display: block;
+    line-height: 1.25;
+}
+
+.period-comparison-summary-metrics {
+    display: grid;
+    gap: 0.15rem;
+    justify-items: end;
+}
+
+.period-comparison-split {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 0.15rem 0.75rem;
+    font-size: 0.75rem;
+}
+
+.period-comparison-details {
+    padding: 0.75rem 0.85rem 0.85rem;
+    background: var(--surface);
+}
+
+.period-comparison-section + .period-comparison-section {
+    margin-top: 0.75rem;
+}
+
+.period-comparison-section .eyebrow {
+    margin: 0 0 0.5rem;
+}
+
+.period-comparison-row-label {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+}
+
+.period-comparison-table td,
+.period-comparison-table th {
+    font-size: 0.8125rem;
+}
+
+.institution-logo-fallback.institution-logo-sm {
+    font-size: 0.625rem;
 }
 
 .product-link {

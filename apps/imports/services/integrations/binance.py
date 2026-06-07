@@ -113,6 +113,26 @@ class BinanceClient(BaseApiClient):
 	def fetch_ticker_prices(self) -> list[dict]:
 		return self._request('GET', '/api/v3/ticker/price')
 
+	def fetch_klines(
+		self,
+		symbol: str,
+		interval: str = '1d',
+		start_time: int | None = None,
+		end_time: int | None = None,
+		limit: int = 1000,
+	) -> list:
+		return self._request(
+			'GET',
+			'/api/v3/klines',
+			{
+				'symbol': symbol,
+				'interval': interval,
+				'startTime': start_time,
+				'endTime': end_time,
+				'limit': limit,
+			},
+		)
+
 	def fetch_my_trades(self, symbol: str, start_time: int | None = None, end_time: int | None = None, from_id: int | None = None, limit: int = 1000) -> list[dict]:
 		return self._request(
 			'GET',
@@ -159,6 +179,33 @@ class BinanceClient(BaseApiClient):
 			{'startTime': start_time, 'endTime': end_time, 'type': reward_type},
 			signed=True,
 		)
+
+	def fetch_account_snapshots(
+		self,
+		snapshot_type: str,
+		*,
+		start_time: int | None = None,
+		end_time: int | None = None,
+		limit: int = 30,
+	) -> list[dict]:
+		payload = self._request(
+			'GET',
+			'/sapi/v1/accountSnapshot',
+			{
+				'type': snapshot_type.upper(),
+				'startTime': start_time,
+				'endTime': end_time,
+				'limit': min(max(limit, 7), 30),
+			},
+			signed=True,
+		)
+		if not isinstance(payload, dict):
+			raise BinanceApiError('Unexpected Binance accountSnapshot response.')
+		code = payload.get('code')
+		if code not in (200, '200'):
+			raise BinanceApiError(str(payload.get('msg') or f'accountSnapshot failed with code {code}'))
+		snapshots = payload.get('snapshotVos', [])
+		return snapshots if isinstance(snapshots, list) else []
 
 
 def decimal_from_binance(value: Any) -> Decimal:

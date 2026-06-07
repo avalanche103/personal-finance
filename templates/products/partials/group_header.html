@@ -1,0 +1,8 @@
+{% load institution_branding %}
+<div class="product-group-heading">
+    {% institution_logo group.institution %}
+    <div class="product-group-title">
+        <strong>{{ group.label }}</strong>
+        <div class="muted{% if compact %} font-mono{% endif %}">{{ group.products|length }} {% if compact %}items{% else %}products{% endif %}</div>
+    </div>
+</div>

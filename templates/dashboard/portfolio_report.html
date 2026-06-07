@@ -41,7 +41,7 @@
             </article>
         </section>
 
-        {% include 'dashboard/partials/period_comparisons.html' %}
+        {% include 'dashboard/partials/period_comparisons.html' with period_comparisons=period_comparisons only %}
 
         {% if latest_snapshot %}
             <p class="muted">Latest snapshot used in report window: {{ latest_snapshot.captured_at|display_datetime }}</p>

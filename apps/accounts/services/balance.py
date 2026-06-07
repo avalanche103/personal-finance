@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from apps.accounts.models import Account, Transaction
@@ -13,8 +14,15 @@ def transaction_affects_account_balance(transaction: Transaction) -> bool:
 
 
 def calculate_account_balance(account: Account) -> Decimal:
+	return calculate_account_balance_as_of(account, timezone.localdate())
+
+
+def calculate_account_balance_as_of(account: Account, as_of_date: date) -> Decimal:
 	total = Decimal('0')
-	for transaction in Transaction.objects.filter(account=account).only('amount', 'metadata'):
+	for transaction in Transaction.objects.filter(account=account, occurred_at__date__lte=as_of_date).only(
+		'amount',
+		'metadata',
+	):
 		if transaction_affects_account_balance(transaction):
 			total += transaction.amount or Decimal('0')
 	return total

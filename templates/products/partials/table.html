@@ -4,10 +4,7 @@
 {% for group in product_groups %}
     <details class="product-group">
         <summary>
-            <div>
-                <strong>{{ group.label }}</strong>
-                <div class="muted">{{ group.products|length }} products</div>
-            </div>
+            {% include 'products/partials/group_header.html' %}
             <div class="text-right">
                 {% include 'products/partials/group_summary_metrics.html' %}
             </div>

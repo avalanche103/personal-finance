@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="alfabank">
+  <rect width="40" height="40" rx="8" fill="var(--institution-logo-bg, #f3f4f6)"/>
+  <g transform="translate(6.00 16.27) scale(0.2333)">
+    <path d="M0 37.983h28V44H0v-6.017Zm8.329-14.201h11.044l1.864 6.05h6.124L19.096 4.4C18.297 1.958 17.371 0 14.208 0c-3.164 0-4.133 1.925-4.963 4.4L.596 29.821h5.741l1.992-6.039ZM13.93 6.6h.138l3.717 12.1h-7.775l3.92-12.1Z" fill="#EF3124" fill-rule="evenodd" />
+  </g>
+</svg>

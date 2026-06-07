@@ -157,9 +157,10 @@ BINANCE_API_BASE_URL=https://api.binance.com
 
 ```bash
 python manage.py sync_binance --spot --snapshots
+python manage.py sync_binance --daily-snapshots --snapshot-days 30
 ```
 
-История Spot-сделок импортируется по явному списку пар, чтобы не обходить весь рынок:
+`--daily-snapshots` pulls Binance `/sapi/v1/accountSnapshot` for the last 30 days (Spot wallet). Flexible Simple Earn is included via `LD*` assets in those Spot snapshots. Locked Simple Earn has no daily history API; only a current snapshot is stored during this import.
 
 ```bash
 python manage.py sync_binance --history --symbols BTCUSDT,ETHUSDT --start-date 2026-01-01

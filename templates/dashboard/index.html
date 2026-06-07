@@ -123,17 +123,17 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% for account in accounts %}
+                        {% for row in balance_rows %}
                             <tr>
-                                <td>{{ account.name }}</td>
-                                <td>{{ account.institution.name }}</td>
-                                <td class="font-mono">{{ account.currency.code }}</td>
+                                <td>{{ row.name }}</td>
+                                <td>{{ row.institution.name }}</td>
+                                <td class="font-mono">{{ row.currency_code }}</td>
                                 <td class="text-right font-mono">
-                                    {% if account.currency.code == 'USD' %}
-                                        <div>{{ account.current_balance|floatformat:2 }} USD</div>
+                                    {% if row.currency_code == 'USD' %}
+                                        <div>{{ row.current_balance|floatformat:2 }} USD</div>
                                     {% else %}
-                                        <div>{{ account.current_balance|floatformat:2 }} {{ account.currency.code }}</div>
-                                        <div class="muted">${{ account.current_balance_usd|floatformat:2 }}</div>
+                                        <div>{{ row.current_balance|floatformat:2 }} {{ row.currency_code }}</div>
+                                        <div class="muted">${{ row.current_balance_usd|floatformat:2 }}</div>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -158,12 +158,9 @@
             <div class="stack-md">
                 {% for group in product_groups %}
                     <details class="product-group">
-                        <summary>
-                            <div>
-                                <strong>{{ group.label }}</strong>
-                                <div class="muted font-mono">{{ group.products|length }} items</div>
-                            </div>
-                            <div class="text-right">
+        <summary>
+            {% include 'products/partials/group_header.html' with compact=True %}
+            <div class="text-right">
                                 {% include 'products/partials/group_summary_metrics.html' %}
                             </div>
                         </summary>
@@ -227,7 +224,7 @@
                 <small>Units × price in USD</small>
             </article>
         </section>
-        {% include 'dashboard/partials/period_comparisons.html' with period_comparisons=historical_reporting.period_comparisons %}
+        {% include 'dashboard/partials/period_comparisons.html' with period_comparisons=historical_reporting.period_comparisons only %}
     </article>
 </section>
 {% endblock %}

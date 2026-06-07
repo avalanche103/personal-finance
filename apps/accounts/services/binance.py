@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timezone as dt_timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -21,6 +21,7 @@ FIAT_ACCOUNT_ASSETS = USD_LIKE_ASSETS | {'EUR', 'GBP', 'BYN', 'RUB', 'TRY', 'UAH
 PRICE_QUOTES = ('USDT', 'USDC', 'FDUSD', 'BUSD', 'USD')
 MONEY_QUANT = Decimal('0.01')
 UNIT_QUANT = Decimal('0.000001')
+BINANCE_DAILY_SNAPSHOT_MAX_DAYS = 30
 
 
 @dataclass
@@ -45,6 +46,10 @@ def _units(value: Decimal) -> Decimal:
 def _timestamp_ms_to_datetime(value: Any) -> datetime:
 	raw = int(value)
 	return datetime.fromtimestamp(raw / 1000, tz=timezone.get_current_timezone())
+
+
+def _ms_to_utc_date(value_ms: int) -> date:
+	return datetime.fromtimestamp(int(value_ms) / 1000, tz=dt_timezone.utc).date()
 
 
 def normalize_binance_asset(asset: str) -> str:
@@ -162,6 +167,96 @@ def _asset_price_usd(asset: str, prices: dict[str, Decimal]) -> tuple[Decimal, s
 	return Decimal('0'), ''
 
 
+def _collect_snapshot_price_symbols(balances: list[dict[str, Any]], ticker_prices: dict[str, Decimal]) -> set[str]:
+	symbols: set[str] = set()
+	for row in balances:
+		asset = row['asset']
+		if asset in FIAT_ACCOUNT_ASSETS:
+			continue
+		_, price_symbol = _asset_price_usd(asset, ticker_prices)
+		if price_symbol:
+			symbols.add(price_symbol.upper())
+	return symbols
+
+
+def _daily_kline_close_index(
+	client: BinanceClient,
+	price_symbols: set[str],
+	start_time_ms: int,
+	end_time_ms: int,
+) -> dict[tuple[str, date], Decimal]:
+	index: dict[tuple[str, date], Decimal] = {}
+	day_ms = 24 * 60 * 60 * 1000
+	padded_start = max(0, start_time_ms - day_ms)
+	padded_end = end_time_ms + day_ms
+	for symbol in sorted(price_symbols):
+		rows = client.fetch_klines(
+			symbol,
+			interval='1d',
+			start_time=padded_start,
+			end_time=padded_end,
+			limit=BINANCE_DAILY_SNAPSHOT_MAX_DAYS + 2,
+		)
+		if not isinstance(rows, list):
+			continue
+		for row in rows:
+			if not row or len(row) < 5:
+				continue
+			day = _ms_to_utc_date(int(row[0]))
+			index[(symbol.upper(), day)] = decimal_from_binance(row[4])
+	return index
+
+
+def _historical_asset_price_usd(
+	asset: str,
+	as_of_date: date,
+	*,
+	ticker_prices: dict[str, Decimal],
+	daily_closes: dict[tuple[str, date], Decimal],
+) -> tuple[Decimal, str]:
+	asset = normalize_binance_asset(asset)
+	if asset in USD_LIKE_ASSETS:
+		return Decimal('1'), asset
+	_, price_symbol = _asset_price_usd(asset, ticker_prices)
+	if not price_symbol:
+		return Decimal('0'), ''
+	price = daily_closes.get((price_symbol.upper(), as_of_date), Decimal('0'))
+	return price, price_symbol
+
+
+def _aggregate_spot_balance_rows(balance_rows: list[dict]) -> list[dict[str, Any]]:
+	asset_totals: dict[str, dict[str, Any]] = {}
+	for row in balance_rows:
+		free = decimal_from_binance(row.get('free'))
+		locked = decimal_from_binance(row.get('locked'))
+		if not free and not locked:
+			continue
+		raw_asset = str(row.get('asset', '')).upper()
+		asset = normalize_binance_asset(raw_asset)
+		if asset not in asset_totals:
+			asset_totals[asset] = {'asset': asset, 'raw_assets': [], 'raw_balances': {}, 'free': Decimal('0'), 'locked': Decimal('0')}
+		asset_totals[asset]['raw_assets'].append(raw_asset)
+		asset_totals[asset]['raw_balances'][raw_asset] = {
+			'free': str(free),
+			'locked': str(locked),
+			'total': str(free + locked),
+		}
+		asset_totals[asset]['free'] += free
+		asset_totals[asset]['locked'] += locked
+	return list(asset_totals.values())
+
+
+def _snapshot_fingerprint(*, snapshot_type: str, area: str, asset: str, update_time_ms: int) -> str:
+	return f'binance:daily:{snapshot_type}:{area}:{asset.upper()}:{update_time_ms}'
+
+
+def _snapshot_exists(institution: FinancialInstitution, fingerprint: str) -> bool:
+	return BalanceSnapshot.objects.filter(
+		institution=institution,
+		metadata__snapshot_fingerprint=fingerprint,
+	).exists()
+
+
 def _non_flexible_spot_units(product: Product) -> Decimal:
 	metadata = product.metadata if isinstance(product.metadata, dict) else {}
 	raw_balances = metadata.get('raw_balances')
@@ -179,25 +274,7 @@ def _non_flexible_spot_units(product: Product) -> Decimal:
 def sync_spot_balances(client: BinanceClient | None = None, *, create_snapshots: bool = True, dry_run: bool = False) -> BinanceSyncResult:
 	client = client or BinanceClient()
 	payload = client.fetch_account()
-	asset_totals: dict[str, dict[str, Any]] = {}
-	for row in payload.get('balances', []):
-		free = decimal_from_binance(row.get('free'))
-		locked = decimal_from_binance(row.get('locked'))
-		if not free and not locked:
-			continue
-		raw_asset = str(row.get('asset', '')).upper()
-		asset = normalize_binance_asset(raw_asset)
-		if asset not in asset_totals:
-			asset_totals[asset] = {'asset': asset, 'raw_assets': [], 'raw_balances': {}, 'free': Decimal('0'), 'locked': Decimal('0')}
-		asset_totals[asset]['raw_assets'].append(raw_asset)
-		asset_totals[asset]['raw_balances'][raw_asset] = {
-			'free': str(free),
-			'locked': str(locked),
-			'total': str(free + locked),
-		}
-		asset_totals[asset]['free'] += free
-		asset_totals[asset]['locked'] += locked
-	balances = list(asset_totals.values())
+	balances = _aggregate_spot_balance_rows(payload.get('balances', []))
 	prices = _price_index(client.fetch_ticker_prices())
 	result = BinanceSyncResult(scope='spot-balances', rows_detected=len(balances))
 	if dry_run:
@@ -317,6 +394,346 @@ def sync_spot_balances(client: BinanceClient | None = None, *, create_snapshots:
 	result.records_created = created
 	result.records_updated = updated
 	result.details = job.details
+	return result
+
+
+def _persist_spot_snapshot_balances(
+	institution: FinancialInstitution,
+	job: ImportJob,
+	*,
+	balances: list[dict[str, Any]],
+	ticker_prices: dict[str, Decimal],
+	daily_closes: dict[tuple[str, date], Decimal],
+	captured_at: datetime,
+	update_time_ms: int,
+	snapshot_type: str = 'spot',
+) -> tuple[int, list[str]]:
+	created = 0
+	missing_prices: list[str] = []
+	price_date = _ms_to_utc_date(update_time_ms)
+	for row in balances:
+		asset = row['asset']
+		raw_assets = row['raw_assets']
+		raw_balances = row['raw_balances']
+		free = row['free']
+		locked = row['locked']
+		total = free + locked
+		fingerprint = _snapshot_fingerprint(snapshot_type=snapshot_type, area='spot', asset=asset, update_time_ms=update_time_ms)
+		if _snapshot_exists(institution, fingerprint):
+			continue
+
+		if asset in FIAT_ACCOUNT_ASSETS:
+			account = _ensure_account(institution, asset, wallet='spot', update_balance=False)
+			BalanceSnapshot.objects.create(
+				institution=institution,
+				account=account,
+				currency=account.currency,
+				balance=total,
+				balance_usd=_money(total),
+				captured_at=captured_at,
+				metadata={
+					'source': 'binance',
+					'snapshot_type': snapshot_type,
+					'snapshot_fingerprint': fingerprint,
+					'wallet': 'spot',
+					'asset': asset,
+					'raw_assets': raw_assets,
+					'raw_balances': raw_balances,
+					'free': str(free),
+					'locked': str(locked),
+					'price_usd': '1',
+					'update_time_ms': update_time_ms,
+					'import_job_id': job.pk,
+				},
+			)
+			created += 1
+			continue
+
+		_ensure_currency(asset)
+		_ensure_account(institution, asset, wallet='spot', update_balance=False)
+		product = _ensure_product(institution, asset, area='spot')
+		price_usd, price_symbol = _historical_asset_price_usd(
+			asset,
+			price_date,
+			ticker_prices=ticker_prices,
+			daily_closes=daily_closes,
+		)
+		if not price_usd:
+			missing_prices.append(asset)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=product,
+			currency=product.currency,
+			balance=_units(total),
+			balance_usd=_money(total * price_usd),
+			captured_at=captured_at,
+			metadata={
+				'source': 'binance',
+				'snapshot_type': snapshot_type,
+				'snapshot_fingerprint': fingerprint,
+				'wallet': 'spot',
+				'asset': asset,
+				'raw_assets': raw_assets,
+				'raw_balances': raw_balances,
+				'product_area': 'spot',
+				'free': str(free),
+				'locked': str(locked),
+				'price_symbol': price_symbol,
+				'price_usd': str(price_usd),
+				'price_date': price_date.isoformat(),
+				'flexible_earn_included': any(str(item).upper().startswith('LD') for item in raw_assets),
+				'update_time_ms': update_time_ms,
+				'import_job_id': job.pk,
+			},
+		)
+		created += 1
+	return created, missing_prices
+
+
+def _persist_earn_locked_snapshot_balances(
+	institution: FinancialInstitution,
+	job: ImportJob,
+	*,
+	locked_totals: dict[str, dict[str, Any]],
+	prices: dict[str, Decimal],
+	captured_at: datetime,
+	update_time_ms: int,
+) -> tuple[int, list[str]]:
+	created = 0
+	missing_prices: list[str] = []
+	for asset, summary in locked_totals.items():
+		if asset in FIAT_ACCOUNT_ASSETS:
+			continue
+		amount = summary['amount']
+		if not amount:
+			continue
+		fingerprint = _snapshot_fingerprint(snapshot_type='earn_locked', area='earn_locked', asset=asset, update_time_ms=update_time_ms)
+		if _snapshot_exists(institution, fingerprint):
+			continue
+		product = _ensure_product(institution, asset, area='earn_locked')
+		price_usd, price_symbol = _asset_price_usd(asset, prices)
+		if not price_usd:
+			missing_prices.append(asset)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=product,
+			currency=product.currency,
+			balance=_units(amount),
+			balance_usd=_money(amount * price_usd),
+			captured_at=captured_at,
+			metadata={
+				'source': 'binance',
+				'snapshot_type': 'earn_locked',
+				'snapshot_fingerprint': fingerprint,
+				'asset': asset,
+				'raw_assets': summary['raw_assets'],
+				'product_area': 'earn_locked',
+				'price_symbol': price_symbol,
+				'payloads': summary['payloads'],
+				'update_time_ms': update_time_ms,
+				'import_job_id': job.pk,
+			},
+		)
+		created += 1
+	return created, missing_prices
+
+
+def sync_daily_account_snapshots(
+	client: BinanceClient | None = None,
+	*,
+	days: int = BINANCE_DAILY_SNAPSHOT_MAX_DAYS,
+	dry_run: bool = False,
+) -> BinanceSyncResult:
+	client = client or BinanceClient()
+	days = max(1, min(int(days), BINANCE_DAILY_SNAPSHOT_MAX_DAYS))
+	end_time = int(timezone.now().timestamp() * 1000)
+	start_time = end_time - days * 24 * 60 * 60 * 1000
+	spot_snapshots = client.fetch_account_snapshots('SPOT', start_time=start_time, end_time=end_time, limit=days)
+	result = BinanceSyncResult(scope='daily-snapshots', rows_detected=len(spot_snapshots))
+	if dry_run:
+		result.details = {
+			'days_requested': days,
+			'spot_snapshot_days': len(spot_snapshots),
+			'flexible_earn_note': 'Flexible Earn appears in SPOT snapshots as LD* assets and is merged into spot products.',
+			'earn_locked_note': 'Locked Simple Earn has no Binance daily history API.',
+		}
+		return result
+
+	institution, source = ensure_binance_reference_data()
+	ticker_prices = _price_index(client.fetch_ticker_prices())
+	price_symbols: set[str] = set()
+	for snapshot in spot_snapshots:
+		data = snapshot.get('data') if isinstance(snapshot.get('data'), dict) else {}
+		price_symbols.update(_collect_snapshot_price_symbols(_aggregate_spot_balance_rows(data.get('balances', [])), ticker_prices))
+	daily_closes = _daily_kline_close_index(client, price_symbols, start_time, end_time)
+	job, _ = ImportJob.objects.get_or_create(
+		source=source,
+		idempotency_key=f'binance:daily-snapshots:{timezone.localdate().isoformat()}',
+		defaults={
+			'institution': institution,
+			'status': ImportJob.Status.PARSING,
+			'file_type': 'api',
+			'parser_name': 'binance-daily-snapshots',
+			'started_at': timezone.now(),
+			'details': {'scope': 'daily-snapshots', 'days': days},
+		},
+	)
+
+	created = 0
+	missing_prices: set[str] = set()
+	with transaction.atomic():
+		for snapshot in spot_snapshots:
+			update_time_ms = int(snapshot.get('updateTime') or 0)
+			if not update_time_ms:
+				continue
+			data = snapshot.get('data') if isinstance(snapshot.get('data'), dict) else {}
+			balances = _aggregate_spot_balance_rows(data.get('balances', []))
+			captured_at = _timestamp_ms_to_datetime(update_time_ms)
+			day_created, day_missing = _persist_spot_snapshot_balances(
+				institution,
+				job,
+				balances=balances,
+				ticker_prices=ticker_prices,
+				daily_closes=daily_closes,
+				captured_at=captured_at,
+				update_time_ms=update_time_ms,
+			)
+			created += day_created
+			missing_prices.update(day_missing)
+
+		try:
+			locked = client.fetch_simple_earn_locked_positions()
+		except BinanceApiError:
+			locked = {}
+		locked_rows = locked.get('rows', []) if isinstance(locked, dict) else []
+		locked_totals: dict[str, dict[str, Any]] = {}
+		for row in locked_rows:
+			raw_asset = str(row.get('asset') or row.get('rewardAsset') or '').upper()
+			asset = normalize_binance_asset(raw_asset)
+			if not asset:
+				continue
+			if asset not in locked_totals:
+				locked_totals[asset] = {'amount': Decimal('0'), 'raw_assets': [], 'payloads': []}
+			locked_totals[asset]['amount'] += decimal_from_binance(row.get('totalAmount') or row.get('amount') or row.get('principalAmount'))
+			locked_totals[asset]['raw_assets'].append(raw_asset)
+			locked_totals[asset]['payloads'].append(row)
+		if locked_totals:
+			update_time_ms = int(timezone.now().timestamp() * 1000)
+			locked_created, locked_missing = _persist_earn_locked_snapshot_balances(
+				institution,
+				job,
+				locked_totals=locked_totals,
+				prices=ticker_prices,
+				captured_at=timezone.now(),
+				update_time_ms=update_time_ms,
+			)
+			created += locked_created
+			missing_prices.update(locked_missing)
+
+		job.status = ImportJob.Status.SAVED
+		job.rows_detected = len(spot_snapshots)
+		job.records_created = created
+		job.details = {
+			'scope': 'daily-snapshots',
+			'days_requested': days,
+			'spot_snapshot_days': len(spot_snapshots),
+			'snapshots_created': created,
+			'flexible_earn_in_spot_snapshots': True,
+			'earn_locked_historical': False,
+			'earn_locked_current_snapshots': len(locked_totals),
+			'missing_prices': sorted(missing_prices),
+		}
+		job.finished_at = timezone.now()
+		job.error_message = ''
+		job.save(update_fields=['status', 'rows_detected', 'records_created', 'details', 'finished_at', 'error_message', 'updated_at'])
+
+	result.job_id = job.pk
+	result.records_created = created
+	result.details = job.details
+	return result
+
+
+def reprice_binance_daily_snapshots(
+	client: BinanceClient | None = None,
+	*,
+	dry_run: bool = False,
+) -> BinanceSyncResult:
+	client = client or BinanceClient()
+	institution = FinancialInstitution.objects.get(slug='binance')
+	snapshots = list(
+		BalanceSnapshot.objects.filter(
+			institution=institution,
+			metadata__snapshot_type='spot',
+		).order_by('captured_at')
+	)
+	result = BinanceSyncResult(scope='reprice-daily-snapshots', rows_detected=len(snapshots))
+	if not snapshots:
+		result.details = {'snapshots_updated': 0}
+		return result
+
+	start_ms = min(int(item.metadata.get('update_time_ms') or 0) for item in snapshots if item.metadata.get('update_time_ms'))
+	end_ms = max(int(item.metadata.get('update_time_ms') or 0) for item in snapshots if item.metadata.get('update_time_ms'))
+	ticker_prices = _price_index(client.fetch_ticker_prices())
+	price_symbols: set[str] = set()
+	for snapshot in snapshots:
+		asset = (snapshot.metadata or {}).get('asset') or snapshot.currency.code
+		if asset in FIAT_ACCOUNT_ASSETS or snapshot.account_id:
+			continue
+		_, price_symbol = _asset_price_usd(asset, ticker_prices)
+		if price_symbol:
+			price_symbols.add(price_symbol.upper())
+	daily_closes = _daily_kline_close_index(client, price_symbols, start_ms, end_ms)
+	result.details = {
+		'price_symbols': sorted(price_symbols),
+		'daily_closes_loaded': len(daily_closes),
+	}
+	if dry_run:
+		return result
+
+	updated = 0
+	missing_prices: set[str] = set()
+	with transaction.atomic():
+		for snapshot in snapshots:
+			metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+			asset = metadata.get('asset') or snapshot.currency.code
+			update_time_ms = int(metadata.get('update_time_ms') or 0)
+			if asset in FIAT_ACCOUNT_ASSETS or snapshot.account_id:
+				new_usd = _money(snapshot.balance or Decimal('0'))
+				metadata['price_usd'] = '1'
+				if snapshot.balance_usd != new_usd:
+					snapshot.balance_usd = new_usd
+					snapshot.metadata = metadata
+					snapshot.save(update_fields=['balance_usd', 'metadata', 'updated_at'])
+					updated += 1
+				continue
+			if not update_time_ms:
+				continue
+			price_date = _ms_to_utc_date(update_time_ms)
+			price_usd, price_symbol = _historical_asset_price_usd(
+				asset,
+				price_date,
+				ticker_prices=ticker_prices,
+				daily_closes=daily_closes,
+			)
+			if not price_usd:
+				missing_prices.add(asset)
+				continue
+			new_usd = _money((snapshot.balance or Decimal('0')) * price_usd)
+			metadata['price_symbol'] = price_symbol
+			metadata['price_usd'] = str(price_usd)
+			metadata['price_date'] = price_date.isoformat()
+			if snapshot.balance_usd != new_usd:
+				snapshot.balance_usd = new_usd
+				snapshot.metadata = metadata
+				snapshot.save(update_fields=['balance_usd', 'metadata', 'updated_at'])
+				updated += 1
+
+	result.records_updated = updated
+	result.details = {
+		'snapshots_seen': len(snapshots),
+		'snapshots_updated': updated,
+		'missing_prices': sorted(missing_prices),
+	}
 	return result
 
 

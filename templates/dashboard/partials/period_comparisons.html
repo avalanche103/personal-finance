@@ -1,27 +1,34 @@
-<div class="table-wrap">
-    <table>
-        <thead>
-            <tr>
-                <th>Reference</th>
-                <th class="text-right">Baseline USD</th>
-                <th class="text-right">Portfolio change</th>
-                <th class="text-right">Accounts change</th>
-                <th class="text-right">Products change</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for period in period_comparisons %}
-                <tr>
-                    <td>
-                        <strong>{{ period.label }}</strong>
-                        <div class="muted">{{ period.reference_date|display_date }}</div>
-                    </td>
-                    <td class="text-right">${{ period.portfolio.baseline_usd|floatformat:2 }}</td>
-                    <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.portfolio %}</td>
-                    <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.accounts %}</td>
-                    <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=period.products %}</td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div class="stack-md period-comparison-list">
+    {% for comparison in period_comparisons %}
+        <details class="period-comparison" {% if forloop.first %}open{% endif %}>
+            <summary>
+                <div class="period-comparison-heading">
+                    <strong>{{ comparison.label }}</strong>
+                    <div class="muted">{{ comparison.reference_date|display_date }}</div>
+                </div>
+                <div class="period-comparison-summary-metrics text-right">
+                    <div class="muted">Baseline ${{ comparison.portfolio.baseline_usd|floatformat:2 }}</div>
+                    <div>{% include 'dashboard/partials/value_change.html' with change=comparison.portfolio only %}</div>
+                    <div class="muted period-comparison-split">
+                        <span>Accounts</span>
+                        <span>{% include 'dashboard/partials/value_change.html' with change=comparison.accounts only %}</span>
+                        <span>Products</span>
+                        <span>{% include 'dashboard/partials/value_change.html' with change=comparison.products only %}</span>
+                    </div>
+                </div>
+            </summary>
+
+            <div class="period-comparison-details stack-md">
+                <section class="period-comparison-section">
+                    <h3 class="eyebrow">Product groups</h3>
+                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_products show_currency=True empty_label='No product groups in this comparison.' only %}
+                </section>
+
+                <section class="period-comparison-section">
+                    <h3 class="eyebrow">Account groups</h3>
+                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_accounts show_currency=False empty_label='No account groups in this comparison.' only %}
+                </section>
+            </div>
+        </details>
+    {% endfor %}
 </div>

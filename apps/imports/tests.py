@@ -852,9 +852,10 @@ class ImportManualSyncTests(TestCase):
 		self.assertContains(follow_up, 'is-recent-sync')
 
 	@patch('apps.imports.services.manual_sync.recalculate_usd_valuations')
+	@patch('apps.imports.services.manual_sync.sync_daily_account_snapshots')
 	@patch('apps.imports.services.manual_sync.sync_earn_and_funding')
 	@patch('apps.imports.services.manual_sync.sync_spot_balances')
-	def test_manual_binance_sync_creates_summary_and_recalculate_jobs(self, sync_spot, sync_earn, recalc_usd):
+	def test_manual_binance_sync_creates_summary_and_recalculate_jobs(self, sync_spot, sync_earn, sync_daily, recalc_usd):
 		from apps.accounts.services.binance import BinanceSyncResult
 		from apps.imports.services.manual_sync import sync_binance_manual
 
@@ -877,6 +878,15 @@ class ImportManualSyncTests(TestCase):
 		)
 		sync_spot.return_value = BinanceSyncResult(scope='spot-balances', job_id=spot_job.pk, rows_detected=5, records_updated=5)
 		sync_earn.return_value = BinanceSyncResult(scope='earn-funding', job_id=earn_job.pk, rows_detected=3, records_updated=2)
+		daily_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:daily:multi',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-daily-snapshots',
+			rows_detected=30,
+		)
+		sync_daily.return_value = BinanceSyncResult(scope='daily-snapshots', job_id=daily_job.pk, rows_detected=30, records_created=120)
 		recalc_usd.return_value = {'accounts': 2, 'transactions': 4, 'balance_snapshots': 1, 'products': 3}
 
 		before = ImportJob.objects.count()
@@ -884,13 +894,13 @@ class ImportManualSyncTests(TestCase):
 
 		self.assertTrue(result.success)
 		self.assertEqual(ImportJob.objects.count(), before + 2)
-		self.assertEqual(len(result.job_ids), 4)
+		self.assertEqual(len(result.job_ids), 5)
 		parsers = set(
 			ImportJob.objects.filter(pk__in=result.job_ids).values_list('parser_name', flat=True)
 		)
 		self.assertEqual(
 			parsers,
-			{'binance-manual-sync', 'binance-spot-balances', 'binance-earn-funding', 'recalculate-usd-values'},
+			{'binance-manual-sync', 'binance-spot-balances', 'binance-earn-funding', 'binance-daily-snapshots', 'recalculate-usd-values'},
 		)
 
 	@patch('apps.imports.services.manual_sync.sync_nbrb_rate_history')

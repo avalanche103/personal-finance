@@ -92,6 +92,16 @@ def recalculate_usd_valuations() -> dict:
 		updated['transactions'] += 1
 
 	for snapshot in BalanceSnapshot.objects.select_related('currency').all():
+		metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+		if metadata.get('source') == 'binance' and snapshot.product_id and metadata.get('price_usd') is not None:
+			price_usd = Decimal(str(metadata['price_usd']))
+			snapshot.balance_usd = (snapshot.balance or Decimal('0')) * price_usd
+			snapshot.save(update_fields=['balance_usd', 'updated_at'])
+			updated['balance_snapshots'] += 1
+			continue
+		if metadata.get('source') == 'binance' and snapshot.product_id:
+			updated['balance_snapshots'] += 1
+			continue
 		rate = get_usd_conversion_rate(snapshot.currency, snapshot.captured_at.date(), rate_cache)
 		snapshot.balance_usd = (snapshot.balance or Decimal('0')) * rate
 		snapshot.save(update_fields=['balance_usd', 'updated_at'])

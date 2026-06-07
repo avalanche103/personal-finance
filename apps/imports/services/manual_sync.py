@@ -8,7 +8,7 @@ from typing import Any
 from django.conf import settings
 from django.utils import timezone
 
-from apps.accounts.services.binance import sync_earn_and_funding, sync_spot_balances
+from apps.accounts.services.binance import sync_daily_account_snapshots, sync_earn_and_funding, sync_spot_balances
 from apps.common.services.exchange_rates import recalculate_usd_valuations, sync_nbrb_rate_history
 from apps.imports.models import ImportJob
 from apps.imports.services.recent_jobs import mark_import_jobs_recent, record_manual_sync_job
@@ -88,6 +88,7 @@ def sync_binance_manual() -> ManualSyncResult:
 	try:
 		spot = sync_spot_balances(create_snapshots=True)
 		earn = sync_earn_and_funding()
+		daily = sync_daily_account_snapshots()
 		usd = recalculate_usd_valuations()
 	except Exception as exc:
 		logger.exception('Manual Binance sync failed')
@@ -111,18 +112,20 @@ def sync_binance_manual() -> ManualSyncResult:
 		source_code='binance-api',
 		parser_name='binance-manual-sync',
 		status=ImportJob.Status.SAVED,
-		rows_detected=spot.rows_detected + earn.rows_detected,
-		records_created=spot.records_created + spot.records_updated + earn.records_updated,
+		rows_detected=spot.rows_detected + earn.rows_detected + daily.rows_detected,
+		records_created=spot.records_created + spot.records_updated + earn.records_updated + daily.records_created,
 		details={
 			'spot_job_id': spot.job_id,
 			'earn_job_id': earn.job_id,
+			'daily_snapshots_job_id': daily.job_id,
 			'recalculate_job_id': recalc_job.pk,
 			'usd': usd,
+			'daily_snapshots': daily.details,
 		},
 	)
 	job_ids = [
 		job_id
-		for job_id in (summary.pk, spot.job_id, earn.job_id, recalc_job.pk)
+		for job_id in (summary.pk, spot.job_id, earn.job_id, daily.job_id, recalc_job.pk)
 		if job_id
 	]
 	mark_import_jobs_recent(job_ids, note='Manual Binance sync')
@@ -130,7 +133,7 @@ def sync_binance_manual() -> ManualSyncResult:
 	message = (
 		f'Binance sync completed. Summary job #{summary.pk}, '
 		f'Spot #{spot.job_id or "-"}, Earn #{earn.job_id or "-"}, '
-		f'Recalculate #{recalc_job.pk}.'
+		f'Daily snapshots #{daily.job_id or "-"}, Recalculate #{recalc_job.pk}.'
 	)
 	return ManualSyncResult(
 		True,
@@ -140,7 +143,9 @@ def sync_binance_manual() -> ManualSyncResult:
 			'summary_job_id': summary.pk,
 			'spot_job_id': spot.job_id,
 			'earn_job_id': earn.job_id,
+			'daily_snapshots_job_id': daily.job_id,
 			'recalculate_job_id': recalc_job.pk,
 			'usd': usd,
+			'daily_snapshots': daily.details,
 		},
 	)

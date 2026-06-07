@@ -1,0 +1,17 @@
+{% load static %}
+{% if logo_path %}
+    <img
+        class="institution-logo institution-logo-{{ size }}"
+        src="{% static logo_path %}"
+        alt="{{ institution_name }}"
+        {% if size == 'sm' %}width="28" height="28"{% else %}width="36" height="36"{% endif %}
+        loading="lazy"
+        decoding="async"
+    >
+{% else %}
+    <span
+        class="institution-logo institution-logo-fallback institution-logo-{{ size }}"
+        style="--institution-accent: {{ accent_color }}"
+        aria-hidden="true"
+    >{{ initials }}</span>
+{% endif %}

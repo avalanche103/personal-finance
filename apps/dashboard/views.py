@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -9,7 +9,13 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
-from apps.accounts.querysets import visible_account_queryset
+from apps.accounts.analytics import build_dashboard_balance_rows
+from apps.accounts.querysets import (
+	is_portfolio_holding_account,
+	portfolio_holding_account_queryset,
+	visible_account_queryset,
+)
+from apps.accounts.services.balance import calculate_account_balance_as_of
 from apps.common.dates import format_display_date
 from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
@@ -18,6 +24,8 @@ from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import (
     build_product_groups,
     build_product_transaction_map,
+    product_group_key,
+    product_group_label,
     reconstruct_insurance_product_value_native,
 )
 from apps.products.models import Product
@@ -60,7 +68,7 @@ class PortfolioHistoryCache:
 
     @classmethod
     def build(cls) -> 'PortfolioHistoryCache':
-        accounts = list(Account.objects.select_related('institution', 'currency').all())
+        accounts = list(portfolio_holding_account_queryset())
         products = list(Product.objects.select_related('institution', 'currency').all())
         insurance_product_ids = [
             product.id
@@ -99,11 +107,49 @@ class PortfolioHistoryCache:
         )
 
 
-def _balance_snapshot_as_of(snapshots: list[BalanceSnapshot], as_of_date: date, fallback: Decimal) -> Decimal:
+def _snapshot_local_date(snapshot: BalanceSnapshot) -> date:
+    return timezone.localtime(snapshot.captured_at).date()
+
+
+def _latest_balance_snapshot_as_of(
+    snapshots: list[BalanceSnapshot],
+    as_of_date: date,
+) -> BalanceSnapshot | None:
     for snapshot in snapshots:
-        if snapshot.captured_at.date() <= as_of_date:
+        if _snapshot_local_date(snapshot) <= as_of_date:
+            return snapshot
+    return None
+
+
+def _balance_snapshot_as_of(snapshots: list[BalanceSnapshot], as_of_date: date, fallback: Decimal) -> Decimal:
+    snapshot = _latest_balance_snapshot_as_of(snapshots, as_of_date)
+    return snapshot.balance if snapshot else fallback
+
+
+def _account_balance_as_of(
+    account: Account,
+    as_of_date: date,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+) -> Decimal:
+    if not is_portfolio_holding_account(account):
+        return Decimal('0')
+    if portfolio_cache is not None:
+        snapshot = _latest_balance_snapshot_as_of(
+            portfolio_cache.account_snapshots.get(account.id, []),
+            as_of_date,
+        )
+        if snapshot:
             return snapshot.balance
-    return fallback
+    else:
+        snapshot = (
+            account.balance_snapshots.filter(captured_at__date__lte=as_of_date)
+            .order_by('-captured_at', '-id')
+            .first()
+        )
+        if snapshot:
+            return snapshot.balance
+    return calculate_account_balance_as_of(account, as_of_date)
 
 
 def _usd_rate_from_cache(
@@ -263,6 +309,10 @@ def _last_day_of_previous_month(reference_date: date) -> date:
     return reference_date.replace(day=1) - timedelta(days=1)
 
 
+def _previous_day(reference_date: date) -> date:
+    return reference_date - timedelta(days=1)
+
+
 def _last_day_of_previous_year(reference_date: date) -> date:
     return date(reference_date.year - 1, 12, 31)
 
@@ -277,6 +327,83 @@ def _value_change(current: Decimal, baseline: Decimal) -> dict:
     }
 
 
+def _portfolio_account_group_values(
+    as_of_date,
+    *,
+    portfolio_cache: PortfolioHistoryCache,
+    rate_cache: dict | None = None,
+) -> dict[int, dict]:
+    rate_cache = rate_cache if rate_cache is not None else {}
+    grouped: OrderedDict[int, dict] = OrderedDict()
+    for account in portfolio_cache.accounts:
+        institution = account.institution
+        value_usd = _account_value_as_of(account, as_of_date, rate_cache, portfolio_cache=portfolio_cache)
+        if institution.id not in grouped:
+            grouped[institution.id] = {
+                'label': institution.name,
+                'institution': institution,
+                'value_usd': Decimal('0'),
+            }
+        grouped[institution.id]['value_usd'] += value_usd
+    return grouped
+
+
+def _portfolio_product_group_values(
+    as_of_date,
+    *,
+    portfolio_cache: PortfolioHistoryCache,
+    rate_cache: dict | None = None,
+) -> dict[tuple[str, str], dict]:
+    rate_cache = rate_cache if rate_cache is not None else {}
+    grouped: OrderedDict[tuple[str, str], dict] = OrderedDict()
+    for product in portfolio_cache.products:
+        group_key = product_group_key(product)
+        value_usd = _product_value_as_of(
+            product,
+            as_of_date,
+            rate_cache,
+            transaction_map=portfolio_cache.transaction_map,
+            portfolio_cache=portfolio_cache,
+        )
+        if group_key not in grouped:
+            grouped[group_key] = {
+                'label': product_group_label(*group_key),
+                'institution': product.institution,
+                'currency': product.currency,
+                'value_usd': Decimal('0'),
+            }
+        grouped[group_key]['value_usd'] += value_usd
+    return grouped
+
+
+def _comparison_breakdown_rows(
+    current_groups: dict,
+    baseline_groups: dict,
+) -> list[dict]:
+    keys = set(current_groups) | set(baseline_groups)
+    rows = []
+    for key in keys:
+        current_row = current_groups.get(key, {})
+        baseline_row = baseline_groups.get(key, {})
+        current_usd = current_row.get('value_usd', Decimal('0'))
+        baseline_usd = baseline_row.get('value_usd', Decimal('0'))
+        if current_usd == 0 and baseline_usd == 0:
+            continue
+        meta = current_row or baseline_row
+        rows.append(
+            {
+                **meta,
+                'current_usd': current_usd,
+                'change': _value_change(current_usd, baseline_usd),
+            }
+        )
+    rows.sort(
+        key=lambda row: (abs(row['change']['change_abs']), row['current_usd']),
+        reverse=True,
+    )
+    return rows
+
+
 def _build_portfolio_period_comparisons(
     as_of_date: date,
     current: dict,
@@ -284,12 +411,35 @@ def _build_portfolio_period_comparisons(
     portfolio_cache: PortfolioHistoryCache | None = None,
 ) -> list[dict]:
     portfolio_cache = portfolio_cache or PortfolioHistoryCache.build()
+    current_rate_cache: dict[tuple[str, str], Decimal] = {}
+    current_account_groups = _portfolio_account_group_values(
+        as_of_date,
+        portfolio_cache=portfolio_cache,
+        rate_cache=current_rate_cache,
+    )
+    current_product_groups = _portfolio_product_group_values(
+        as_of_date,
+        portfolio_cache=portfolio_cache,
+        rate_cache=current_rate_cache,
+    )
     comparisons = []
     for key, label, reference_date in (
+        ('prev_day', 'Previous day', _previous_day(as_of_date)),
         ('prev_month', 'Last day of previous month', _last_day_of_previous_month(as_of_date)),
         ('prev_year', 'Last day of previous year', _last_day_of_previous_year(as_of_date)),
     ):
         baseline = _historical_portfolio_context(reference_date, portfolio_cache=portfolio_cache)
+        baseline_rate_cache: dict[tuple[str, str], Decimal] = {}
+        baseline_account_groups = _portfolio_account_group_values(
+            reference_date,
+            portfolio_cache=portfolio_cache,
+            rate_cache=baseline_rate_cache,
+        )
+        baseline_product_groups = _portfolio_product_group_values(
+            reference_date,
+            portfolio_cache=portfolio_cache,
+            rate_cache=baseline_rate_cache,
+        )
         comparisons.append(
             {
                 'key': key,
@@ -298,6 +448,8 @@ def _build_portfolio_period_comparisons(
                 'portfolio': _value_change(current['portfolio_usd'], baseline['portfolio_usd']),
                 'accounts': _value_change(current['accounts_total_usd'], baseline['accounts_total_usd']),
                 'products': _value_change(current['products_total_usd'], baseline['products_total_usd']),
+                'breakdown_products': _comparison_breakdown_rows(current_product_groups, baseline_product_groups),
+                'breakdown_accounts': _comparison_breakdown_rows(current_account_groups, baseline_account_groups),
             }
         )
     return comparisons
@@ -316,12 +468,10 @@ def _account_value_as_of(
 ) -> Decimal:
     if _is_current_portfolio_date(as_of_date):
         return account.current_balance_usd or Decimal('0')
+    if not is_portfolio_holding_account(account):
+        return Decimal('0')
+    balance = _account_balance_as_of(account, as_of_date, portfolio_cache=portfolio_cache)
     if portfolio_cache is not None:
-        balance = _balance_snapshot_as_of(
-            portfolio_cache.account_snapshots.get(account.id, []),
-            as_of_date,
-            account.current_balance,
-        )
         rate = _usd_rate_from_cache(
             account.currency,
             as_of_date,
@@ -329,12 +479,6 @@ def _account_value_as_of(
             portfolio_cache.exchange_rates_by_code,
         )
     else:
-        snapshot = (
-            account.balance_snapshots.filter(captured_at__date__lte=as_of_date)
-            .order_by('-captured_at', '-id')
-            .first()
-        )
-        balance = snapshot.balance if snapshot else account.current_balance
         rate = get_usd_conversion_rate(account.currency, as_of_date, rate_cache)
     return balance * rate
 
@@ -459,13 +603,13 @@ def _historical_portfolio_context(
     latest_snapshot = None
     for snapshots in portfolio_cache.account_snapshots.values():
         for snapshot in snapshots:
-            if snapshot.captured_at.date() <= as_of_date and (
+            if _snapshot_local_date(snapshot) <= as_of_date and (
                 latest_snapshot is None or snapshot.captured_at > latest_snapshot.captured_at
             ):
                 latest_snapshot = snapshot
     for snapshots in portfolio_cache.product_snapshots.values():
         for snapshot in snapshots:
-            if snapshot.captured_at.date() <= as_of_date and (
+            if _snapshot_local_date(snapshot) <= as_of_date and (
                 latest_snapshot is None or snapshot.captured_at > latest_snapshot.captured_at
             ):
                 latest_snapshot = snapshot
@@ -497,7 +641,9 @@ def dashboard_home(request):
             portfolio_cache=portfolio_cache,
         ),
         'institutions': FinancialInstitution.objects.order_by('name')[:5],
-        'accounts': visible_account_queryset().order_by('name')[:8],
+        'balance_rows': build_dashboard_balance_rows(
+            visible_account_queryset().order_by('-current_balance_usd', 'name'),
+        ),
         'product_groups': build_product_groups(products, transaction_map=product_transaction_map, as_of_date=as_of_date),
         'recent_imports': ImportJob.objects.select_related('source').order_by('-created_at')[:5],
         'recent_transactions': Transaction.objects.select_related('account', 'currency', 'product').order_by('-occurred_at')[:12],

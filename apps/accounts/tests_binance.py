@@ -5,6 +5,7 @@ from django.test import TestCase
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.accounts.services.binance import (
 	normalize_binance_asset,
+	sync_daily_account_snapshots,
 	sync_earn_and_funding,
 	sync_spot_balances,
 	sync_spot_history,
@@ -28,6 +29,12 @@ class FakeBinanceClient:
 
 	def fetch_ticker_prices(self):
 		return [{'symbol': 'BTCUSDT', 'price': '70000.00000000'}]
+
+	def fetch_klines(self, symbol, interval='1d', start_time=None, end_time=None, limit=1000):
+		return [
+			[1764547200000, '69000.00000000', '70000.00000000', '68000.00000000', '69500.00000000', '0', 1764633599999, '0', 0, '0', '0', 0],
+			[1767225600000, '70000.00000000', '71000.00000000', '69000.00000000', '70500.00000000', '0', 1767311999999, '0', 0, '0', '0', 0],
+		]
 
 	def fetch_symbol_map(self):
 		return {'BTCUSDT': BinanceSymbol(symbol='BTCUSDT', base_asset='BTC', quote_asset='USDT')}
@@ -54,6 +61,33 @@ class FakeBinanceClient:
 
 	def fetch_simple_earn_locked_positions(self):
 		return {'rows': [{'asset': 'ETH', 'amount': '1.50000000'}]}
+
+	def fetch_account_snapshots(self, snapshot_type, *, start_time=None, end_time=None, limit=30):
+		return [
+			{
+				'updateTime': 1764547200000,
+				'type': 'spot',
+				'data': {
+					'balances': [
+						{'asset': 'BTC', 'free': '0.40000000', 'locked': '0.00000000'},
+						{'asset': 'LDBTC', 'free': '0.10000000', 'locked': '0.00000000'},
+					],
+					'totalAssetOfBtc': '0.50000000',
+				},
+			},
+			{
+				'updateTime': 1767225600000,
+				'type': 'spot',
+				'data': {
+					'balances': [
+						{'asset': 'BTC', 'free': '0.50000000', 'locked': '0.00000000'},
+						{'asset': 'LDBTC', 'free': '0.10000000', 'locked': '0.00000000'},
+						{'asset': 'USDT', 'free': '100.00000000', 'locked': '0.00000000'},
+					],
+					'totalAssetOfBtc': '0.51000000',
+				},
+			},
+		]
 
 
 class BinanceClientTests(TestCase):
@@ -117,3 +151,26 @@ class BinanceSyncTests(TestCase):
 		self.assertFalse(Product.objects.filter(institution=institution, external_id='binance:earn_flexible:BTC').exists())
 		self.assertEqual(str(Product.objects.get(institution=institution, external_id='binance:spot:BTC').units), '0.600000')
 		self.assertTrue(Product.objects.filter(institution=institution, external_id='binance:earn_locked:ETH').exists())
+
+	def test_daily_account_snapshots_import_spot_history_and_skip_duplicates(self):
+		first = sync_daily_account_snapshots(client=FakeBinanceClient(), days=30)
+		self.assertEqual(first.rows_detected, 2)
+		self.assertGreater(first.records_created, 0)
+
+		institution = FinancialInstitution.objects.get(slug='binance')
+		btc = Product.objects.get(institution=institution, external_id='binance:spot:BTC')
+		historical = BalanceSnapshot.objects.filter(product=btc, metadata__snapshot_type='spot').order_by('captured_at')
+		self.assertEqual(historical.count(), 2)
+		self.assertEqual(str(historical.first().balance), '0.500000')
+		self.assertEqual(str(historical.last().balance), '0.600000')
+		self.assertEqual(str(historical.first().balance_usd), '34750.00')
+		self.assertEqual(historical.first().metadata.get('price_usd'), '69500.00000000')
+		self.assertTrue(any(item.metadata.get('flexible_earn_included') for item in historical))
+
+		second = sync_daily_account_snapshots(client=FakeBinanceClient(), days=30)
+		self.assertEqual(second.records_created, 1)
+		self.assertEqual(BalanceSnapshot.objects.filter(product=btc, metadata__snapshot_type='spot').count(), 2)
+		self.assertEqual(BalanceSnapshot.objects.filter(institution=institution, metadata__snapshot_type='spot').count(), 3)
+		self.assertTrue(
+			BalanceSnapshot.objects.filter(institution=institution, metadata__snapshot_type='earn_locked').exists()
+		)

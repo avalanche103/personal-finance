@@ -8,6 +8,8 @@ from django.utils import timezone
 
 from apps.accounts.services.binance import (
 	BinanceSyncResult,
+	reprice_binance_daily_snapshots,
+	sync_daily_account_snapshots,
 	sync_deposits_withdrawals,
 	sync_earn_and_funding,
 	sync_spot_balances,
@@ -36,6 +38,9 @@ class Command(BaseCommand):
 		parser.add_argument('--earn', action='store_true', help='Sync Simple Earn and Funding wallet positions.')
 		parser.add_argument('--funding', action='store_true', help='Alias for --earn; kept for command readability.')
 		parser.add_argument('--snapshots', action='store_true', help='Create BalanceSnapshot rows during Spot balance sync.')
+		parser.add_argument('--daily-snapshots', action='store_true', help='Import Binance daily account snapshots (Spot up to 30 days, includes flexible Earn LD assets).')
+		parser.add_argument('--reprice-daily-snapshots', action='store_true', help='Revalue existing Binance daily Spot snapshots using historical kline closes.')
+		parser.add_argument('--snapshot-days', type=int, default=30, help='Days of Binance daily snapshots to import (max 30).')
 		parser.add_argument('--symbols', default='', help='Comma-separated Binance symbols for --history, e.g. BTCUSDT,ETHUSDT.')
 		parser.add_argument('--start-date', default=None, help='Optional start date in YYYY-MM-DD format for history/transfers.')
 		parser.add_argument('--end-date', default=None, help='Optional end date in YYYY-MM-DD format for history/transfers.')
@@ -56,7 +61,9 @@ class Command(BaseCommand):
 		run_history = options['history']
 		run_transfers = options['transfers']
 		run_earn = options['earn'] or options['funding']
-		if not any([run_spot, run_history, run_transfers, run_earn]):
+		run_daily_snapshots = options['daily_snapshots']
+		run_reprice_daily_snapshots = options['reprice_daily_snapshots']
+		if not any([run_spot, run_history, run_transfers, run_earn, run_daily_snapshots, run_reprice_daily_snapshots]):
 			run_spot = True
 
 		start_time = _date_to_ms(options['start_date'])
@@ -83,3 +90,9 @@ class Command(BaseCommand):
 
 		if run_earn:
 			self._write_result(sync_earn_and_funding(dry_run=dry_run))
+
+		if run_daily_snapshots:
+			self._write_result(sync_daily_account_snapshots(days=options['snapshot_days'], dry_run=dry_run))
+
+		if run_reprice_daily_snapshots:
+			self._write_result(reprice_binance_daily_snapshots(dry_run=dry_run))
