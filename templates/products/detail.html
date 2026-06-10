@@ -266,6 +266,7 @@
                         <th class="text-right">Quantity</th>
                         <th class="text-right">Amount</th>
                         <th class="text-right">Unit price</th>
+                        <th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -278,10 +279,11 @@
                             <td class="text-right">{{ transaction.quantity|floatformat:4 }}</td>
                             <td class="text-right">{{ transaction.amount|floatformat:2 }} {{ transaction.currency.code }}</td>
                             <td class="text-right">{{ transaction.unit_price|floatformat:4 }}</td>
+                            <td class="text-right"><a class="muted" href="{% url 'accounts:transaction_edit' transaction.pk %}">Edit</a></td>
                         </tr>
                     {% empty %}
                         <tr>
-                            <td colspan="7" class="empty-state">No product transactions found.</td>
+                            <td colspan="8" class="empty-state">No product transactions found.</td>
                         </tr>
                     {% endfor %}
                 </tbody>

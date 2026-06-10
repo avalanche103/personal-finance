@@ -10,8 +10,14 @@
             <p class="eyebrow">{{ eyebrow }}</p>
             <h2>{{ title }}</h2>
         </div>
-        <a class="button button-secondary" href="{% url back_url %}">Back to accounts</a>
+        <a class="button button-secondary" href="{% if back_href %}{{ back_href }}{% else %}{% url back_url %}{% endif %}">{{ back_label|default:'Back to accounts' }}</a>
     </div>
+
+    {% if is_imported_transaction %}
+        <div class="message">
+            This transaction came from an import or external sync. Saving changes updates the ledger entry only; the original import job and fingerprint stay unchanged.
+        </div>
+    {% endif %}
 
     <form method="post" class="stack-md">
         {% csrf_token %}
@@ -32,7 +38,7 @@
         </div>
         <div class="form-actions">
             <button type="submit" class="button">{{ submit_label }}</button>
-            <a class="button button-secondary" href="{% url back_url %}">Cancel</a>
+            <a class="button button-secondary" href="{% if back_href %}{{ back_href }}{% else %}{% url back_url %}{% endif %}">Cancel</a>
         </div>
     </form>
 </section>

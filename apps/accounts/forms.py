@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from django import forms
+from django.utils import timezone
 
 from apps.accounts.models import Account, Transaction
-from apps.common.services.ledger import create_account, create_transaction
+from apps.common.services.ledger import create_account, create_transaction, update_transaction
 
 
 class AccountForm(forms.ModelForm):
@@ -71,10 +72,20 @@ class TransactionForm(forms.ModelForm):
 		self.fields['unit_price'].required = False
 		self.fields['description'].required = False
 		self.fields['metadata'].required = False
+		self.fields['occurred_at'].input_formats = ['%Y-%m-%dT%H:%M']
 		for field in self.fields.values():
 			field.widget.attrs.setdefault('class', 'form-control')
 
 	def save(self, commit=True):
 		if not commit:
 			return super().save(commit=False)
+		if self.instance and self.instance.pk:
+			metadata = self.cleaned_data.get('metadata') or {}
+			if self.instance.import_job_id or not self.instance.import_fingerprint.startswith('manual:'):
+				metadata = {
+					**metadata,
+					'manual_override': True,
+					'manual_override_at': timezone.now().isoformat(),
+				}
+			return update_transaction(self.instance, **{**self.cleaned_data, 'metadata': metadata})
 		return create_transaction(**self.cleaned_data)

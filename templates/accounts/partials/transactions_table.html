@@ -1,0 +1,78 @@
+{% load pf_extras %}
+<div class="table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Account</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Description</th>
+                <th class="text-right">Amount</th>
+                <th class="text-right">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tx in transactions %}
+                <tr>
+                    <td class="font-mono">{{ tx.occurred_at|display_datetime }}</td>
+                    <td>
+                        {{ tx.account.name }}
+                        <div class="muted">{{ tx.account.institution.name }}</div>
+                    </td>
+                    <td>{{ tx.get_transaction_type_display }}</td>
+                    <td>
+                        {{ tx.source_label }}
+                        <div class="muted">{{ tx.source_detail }}</div>
+                    </td>
+                    <td>
+                        {{ tx.description|default:'-'|truncatechars:64 }}
+                        {% if tx.product %}
+                            <div class="muted">{{ tx.product.name }}</div>
+                        {% endif %}
+                        {% if tx.metadata.manual_override %}
+                            <div class="muted">Manual override</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-right font-mono {% if tx.amount_usd < 0 %}delta-down{% elif tx.amount_usd > 0 %}delta-up{% endif %}">
+                        <div>{{ tx.amount|floatformat:2 }} {{ tx.currency.code }}</div>
+                        {% if tx.currency.code != 'USD' %}
+                            <div class="muted">${{ tx.amount_usd|floatformat:2 }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <a class="muted" href="{% url 'accounts:transaction_edit' tx.pk %}{% if transaction_filters_query %}?{{ transaction_filters_query }}{% endif %}">Edit</a>
+                        <span class="muted"> · </span>
+                        <a class="muted" href="{% url 'accounts:transaction_delete' tx.pk %}{% if transaction_filters_query %}?{{ transaction_filters_query }}{% endif %}">Delete</a>
+                    </td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="7" class="empty-state">No transactions found.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if transactions_page.has_other_pages %}
+    <div class="form-actions">
+        {% if transactions_page.has_previous %}
+            <a
+                class="button button-secondary"
+                hx-get="{% url 'accounts:transaction_list' %}?{{ transaction_previous_query }}"
+                hx-target="#transactions-table"
+                href="?{{ transaction_previous_query }}#transactions"
+            >Previous</a>
+        {% endif %}
+        <span class="muted">Page {{ transactions_page.number }} of {{ transactions_page.paginator.num_pages }}</span>
+        {% if transactions_page.has_next %}
+            <a
+                class="button button-secondary"
+                hx-get="{% url 'accounts:transaction_list' %}?{{ transaction_next_query }}"
+                hx-target="#transactions-table"
+                href="?{{ transaction_next_query }}#transactions"
+            >Next</a>
+        {% endif %}
+    </div>
+{% endif %}

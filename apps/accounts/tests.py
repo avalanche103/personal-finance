@@ -3,10 +3,12 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import Account, Transaction
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
+from apps.imports.models import ImportJob, ImportSource
 
 
 class AccountViewsTests(TestCase):
@@ -124,12 +126,194 @@ class AccountViewsTests(TestCase):
             },
         )
 
-        self.assertRedirects(response, reverse('accounts:list'))
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
         transaction = Transaction.objects.get(description='Manual interest')
         self.assertTrue(transaction.import_fingerprint.startswith('manual:'))
         self.assertEqual(transaction.amount_usd, Decimal('3.10'))
         account.refresh_from_db()
         self.assertEqual(account.current_balance, Decimal('10.00'))
+
+    def test_account_list_embeds_transaction_panel_and_filters_transactions(self):
+        checking = Account.objects.get(name='Checking')
+        brokerage = Account.objects.get(name='Brokerage cash')
+        Transaction.objects.create(
+            account=checking,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.byn,
+            import_fingerprint='manual:interest',
+            amount=Decimal('10.00'),
+            amount_usd=Decimal('3.10'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 6, 12, 0)),
+            description='Manual interest',
+        )
+        Transaction.objects.create(
+            account=brokerage,
+            transaction_type=Transaction.TransactionType.FEE,
+            currency=self.usd,
+            import_fingerprint='manual:fee',
+            amount=Decimal('-2.00'),
+            amount_usd=Decimal('-2.00'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 7, 12, 0)),
+            description='Brokerage fee',
+        )
+
+        response = self.client.get(reverse('accounts:list'), {'tx_q': 'interest'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Transactions')
+        self.assertContains(response, 'Manual interest')
+        self.assertNotContains(response, 'Brokerage fee')
+
+    def test_transaction_edit_recalculates_usd_and_syncs_balance(self):
+        account = Account.objects.get(name='Checking')
+        ledger_transaction = Transaction.objects.create(
+            account=account,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.byn,
+            import_fingerprint='manual:edit',
+            amount=Decimal('10.00'),
+            amount_usd=Decimal('3.10'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 6, 12, 0)),
+            description='Manual interest',
+        )
+        account.current_balance = Decimal('10.00')
+        account.save(update_fields=['current_balance'])
+
+        response = self.client.post(
+            reverse('accounts:transaction_edit', args=[ledger_transaction.pk]),
+            {
+                'account': account.pk,
+                'related_account': '',
+                'product': '',
+                'transaction_type': Transaction.TransactionType.INCOME,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '20.00',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-06T12:00',
+                'description': 'Updated interest',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        ledger_transaction.refresh_from_db()
+        self.assertEqual(ledger_transaction.amount, Decimal('20.00'))
+        self.assertEqual(ledger_transaction.amount_usd, Decimal('6.20'))
+        account.refresh_from_db()
+        self.assertEqual(account.current_balance, Decimal('20.00'))
+
+    def test_transaction_edit_syncs_old_and_new_accounts_when_account_changes(self):
+        old_account = Account.objects.get(name='Checking')
+        new_account = Account.objects.get(name='Brokerage BYN')
+        ledger_transaction = Transaction.objects.create(
+            account=old_account,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=self.byn,
+            import_fingerprint='manual:move',
+            amount=Decimal('10.00'),
+            amount_usd=Decimal('3.10'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 6, 12, 0)),
+            description='Move account',
+        )
+        old_account.current_balance = Decimal('10.00')
+        new_account.current_balance = Decimal('0.00')
+        old_account.save(update_fields=['current_balance'])
+        new_account.save(update_fields=['current_balance'])
+
+        response = self.client.post(
+            reverse('accounts:transaction_edit', args=[ledger_transaction.pk]),
+            {
+                'account': new_account.pk,
+                'related_account': '',
+                'product': '',
+                'transaction_type': Transaction.TransactionType.DEPOSIT,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '10.00',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-06T12:00',
+                'description': 'Move account',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        old_account.refresh_from_db()
+        new_account.refresh_from_db()
+        self.assertEqual(old_account.current_balance, Decimal('0'))
+        self.assertEqual(new_account.current_balance, Decimal('10.00'))
+
+    def test_transaction_delete_syncs_balance(self):
+        account = Account.objects.get(name='Checking')
+        ledger_transaction = Transaction.objects.create(
+            account=account,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.byn,
+            import_fingerprint='manual:delete',
+            amount=Decimal('10.00'),
+            amount_usd=Decimal('3.10'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 6, 12, 0)),
+            description='Delete me',
+        )
+        account.current_balance = Decimal('10.00')
+        account.save(update_fields=['current_balance'])
+
+        response = self.client.post(reverse('accounts:transaction_delete_confirm', args=[ledger_transaction.pk]))
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        self.assertFalse(Transaction.objects.filter(pk=ledger_transaction.pk).exists())
+        account.refresh_from_db()
+        self.assertEqual(account.current_balance, Decimal('0'))
+
+    def test_imported_transaction_edit_preserves_import_fields_and_marks_override(self):
+        account = Account.objects.get(name='Checking')
+        source = ImportSource.objects.create(
+            name='Finstore XLS',
+            code='finstore-xls',
+            source_type=ImportSource.SourceType.XLS,
+        )
+        import_job = ImportJob.objects.create(source=source, idempotency_key='job-1', status=ImportJob.Status.SAVED)
+        ledger_transaction = Transaction.objects.create(
+            account=account,
+            import_job=import_job,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.byn,
+            import_fingerprint='finstore:checksum:1',
+            amount=Decimal('10.00'),
+            amount_usd=Decimal('3.10'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 6, 12, 0)),
+            description='Imported interest',
+            metadata={'imported_from': 'finstore-history'},
+        )
+
+        response = self.client.post(
+            reverse('accounts:transaction_edit', args=[ledger_transaction.pk]),
+            {
+                'account': account.pk,
+                'related_account': '',
+                'product': '',
+                'transaction_type': Transaction.TransactionType.INCOME,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '11.00',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-06T12:00',
+                'description': 'Corrected imported interest',
+                'metadata': '{"imported_from": "finstore-history"}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        ledger_transaction.refresh_from_db()
+        self.assertEqual(ledger_transaction.import_fingerprint, 'finstore:checksum:1')
+        self.assertEqual(ledger_transaction.import_job, import_job)
+        self.assertEqual(ledger_transaction.amount, Decimal('11.00'))
+        self.assertTrue(ledger_transaction.metadata['manual_override'])
+        self.assertIn('manual_override_at', ledger_transaction.metadata)
 
     def test_admin_add_is_disabled_for_accounts_and_transactions(self):
         user_model = get_user_model()

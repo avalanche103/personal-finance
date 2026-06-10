@@ -26,4 +26,50 @@
         {% include 'accounts/partials/table.html' %}
     </div>
 </section>
+
+<section id="transactions" class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Ledger</p>
+            <h2>Transactions</h2>
+            <p class="muted">Manual, imported, and external ledger entries.</p>
+        </div>
+        <a class="button" href="{% url 'accounts:transaction_create' %}">Add transaction</a>
+    </div>
+
+    <form
+        class="filter-bar"
+        hx-get="{% url 'accounts:transaction_list' %}"
+        hx-target="#transactions-table"
+        hx-trigger="keyup changed delay:300ms from:input, change from:select"
+    >
+        <input type="search" name="tx_q" value="{{ transaction_query }}" placeholder="Search description, account, product or external ID">
+        <select name="tx_account">
+            <option value="">All accounts</option>
+            {% for account in transaction_accounts %}
+                <option value="{{ account.pk }}" {% if transaction_account == account.pk|stringformat:'s' %}selected{% endif %}>
+                    {{ account.institution.name }} · {{ account.name }}
+                </option>
+            {% endfor %}
+        </select>
+        <select name="tx_type">
+            <option value="">All types</option>
+            {% for value, label in transaction_types %}
+                <option value="{{ value }}" {% if transaction_type == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <select name="tx_source">
+            <option value="">All sources</option>
+            <option value="manual" {% if transaction_source == 'manual' %}selected{% endif %}>Manual</option>
+            <option value="imported" {% if transaction_source == 'imported' %}selected{% endif %}>Imported</option>
+            <option value="api_cli" {% if transaction_source == 'api_cli' %}selected{% endif %}>API/CLI</option>
+        </select>
+        <input type="date" name="tx_date_from" value="{{ transaction_date_from }}" aria-label="Date from">
+        <input type="date" name="tx_date_to" value="{{ transaction_date_to }}" aria-label="Date to">
+    </form>
+
+    <div id="transactions-table">
+        {% include 'accounts/partials/transactions_table.html' %}
+    </div>
+</section>
 {% endblock %}

@@ -134,3 +134,55 @@ def create_transaction(
 		if sync_balance:
 			sync_account_balance(account)
 	return ledger_transaction
+
+
+def update_transaction(
+	ledger_transaction: Transaction,
+	*,
+	account: Account,
+	transaction_type: str,
+	currency,
+	amount: Decimal,
+	occurred_at,
+	related_account: Account | None = None,
+	product: Product | None = None,
+	external_id: str = '',
+	quantity: Decimal = Decimal('0'),
+	unit_price: Decimal = Decimal('0'),
+	description: str = '',
+	metadata: dict | None = None,
+	sync_balance: bool = True,
+) -> Transaction:
+	if timezone.is_naive(occurred_at):
+		occurred_at = timezone.make_aware(occurred_at, timezone.get_current_timezone())
+	amount = amount or Decimal('0')
+	old_account = Transaction.objects.select_related('account').get(pk=ledger_transaction.pk).account
+	with transaction.atomic():
+		ledger_transaction.account = account
+		ledger_transaction.related_account = related_account
+		ledger_transaction.product = product
+		ledger_transaction.transaction_type = transaction_type
+		ledger_transaction.currency = currency
+		ledger_transaction.external_id = external_id or ''
+		ledger_transaction.amount = amount
+		ledger_transaction.amount_usd = _amount_to_usd(currency, amount, occurred_at.date())
+		ledger_transaction.quantity = quantity or Decimal('0')
+		ledger_transaction.unit_price = unit_price or Decimal('0')
+		ledger_transaction.occurred_at = occurred_at
+		ledger_transaction.description = description or ''
+		ledger_transaction.metadata = metadata or {}
+		ledger_transaction.full_clean()
+		ledger_transaction.save()
+		if sync_balance:
+			sync_account_balance(old_account)
+			if old_account.pk != account.pk:
+				sync_account_balance(account)
+	return ledger_transaction
+
+
+def delete_transaction(ledger_transaction: Transaction, *, sync_balance: bool = True) -> None:
+	account = ledger_transaction.account
+	with transaction.atomic():
+		ledger_transaction.delete()
+		if sync_balance:
+			sync_account_balance(account)

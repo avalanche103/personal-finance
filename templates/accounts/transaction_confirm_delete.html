@@ -1,0 +1,40 @@
+{% extends 'core/base.html' %}
+{% load pf_extras %}
+
+{% block title %}Delete transaction #{{ transaction.pk }} | {{ project_name }}{% endblock %}
+{% block page_title %}Delete transaction #{{ transaction.pk }}{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Ledger entry</p>
+            <h2>Confirm deletion</h2>
+        </div>
+        <a class="button button-secondary" href="{{ back_url }}">Back to accounts</a>
+    </div>
+
+    {% if transaction.import_job_id or transaction.import_fingerprint|slice:':7' != 'manual:' %}
+        <div class="message">
+            This transaction came from an import or external sync. Deleting it removes the ledger entry only; the original import job and raw file stay unchanged.
+        </div>
+    {% endif %}
+
+    <div class="meta-list">
+        <div class="meta-item"><strong>Date</strong><div class="muted">{{ transaction.occurred_at|display_datetime }}</div></div>
+        <div class="meta-item"><strong>Account</strong><div class="muted">{{ transaction.account.name }}</div></div>
+        <div class="meta-item"><strong>Type</strong><div class="muted">{{ transaction.get_transaction_type_display }}</div></div>
+        <div class="meta-item"><strong>Source</strong><div class="muted">{{ transaction.source_label }} · {{ transaction.source_detail }}</div></div>
+        <div class="meta-item"><strong>Amount</strong><div class="muted">{{ transaction.amount|floatformat:2 }} {{ transaction.currency.code }}</div></div>
+        <div class="meta-item"><strong>Description</strong><div class="muted">{{ transaction.description|default:'-' }}</div></div>
+    </div>
+
+    <form method="post" action="{% url 'accounts:transaction_delete_confirm' transaction.pk %}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}">
+        {% csrf_token %}
+        <div class="form-actions">
+            <button type="submit" class="button">Delete transaction</button>
+            <a class="button button-secondary" href="{{ back_url }}">Cancel</a>
+        </div>
+    </form>
+</section>
+{% endblock %}

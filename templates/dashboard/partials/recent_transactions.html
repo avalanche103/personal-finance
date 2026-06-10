@@ -15,7 +15,11 @@
                     <td class="font-mono">{{ tx.occurred_at|display_date }}</td>
                     <td>{{ tx.account.name }}</td>
                     <td>{{ tx.get_transaction_type_display }}</td>
-                    <td>{{ tx.description|default:'—'|truncatechars:48 }}</td>
+                    <td>
+                        <a class="muted" href="{% url 'accounts:transaction_edit' tx.pk %}">
+                            {{ tx.description|default:'—'|truncatechars:48 }}
+                        </a>
+                    </td>
                     <td class="text-right font-mono {% if tx.amount_usd < 0 %}delta-down{% elif tx.amount_usd > 0 %}delta-up{% endif %}">
                         {% if tx.currency.code == 'USD' %}
                             <div>{{ tx.amount|floatformat:2 }} USD</div>
