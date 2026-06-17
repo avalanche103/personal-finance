@@ -153,3 +153,26 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 IMPORT_RAW_DIR = DATA_DIR / 'raw'
 IMPORT_PROCESSED_DIR = DATA_DIR / 'processed'
 REPORTING_BASE_CURRENCY = os.getenv('REPORTING_BASE_CURRENCY', 'USD')
+
+_csrf_origins = os.getenv('DJANGO_CSRF_TRUSTED_ORIGINS', '')
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in _csrf_origins.split(',')
+    if origin.strip()
+]
+
+if os.getenv('DJANGO_USE_WHITENOISE', '').lower() == 'true':
+    MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        },
+    }
+
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True

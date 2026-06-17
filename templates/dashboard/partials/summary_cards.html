@@ -1,22 +1,22 @@
 <section class="metric-grid">
-    <article class="metric-card metric-card--accent">
-        <span>Institutions</span>
-        <strong class="metric-value">{{ metrics.institutions_count }}</strong>
-        <small>Ownership points in the data model.</small>
-    </article>
-    <article class="metric-card metric-card--neutral">
-        <span>Accounts</span>
-        <strong class="metric-value">{{ metrics.accounts_count }}</strong>
-        <small>Banking, brokerage, deposits, wallets.</small>
-    </article>
     <article class="metric-card metric-card--success">
-        <span>Products</span>
-        <strong class="metric-value">{{ metrics.products_count }}</strong>
-        <small>Active assets linked to institutions.</small>
+        <span>Deposit · Month</span>
+        <strong class="metric-value font-mono">${{ metrics.cash_flows.month_deposits_usd|floatformat:2 }}</strong>
+        <small>Calendar month to {{ metrics.cash_flows.as_of_date|display_date }}.</small>
     </article>
     <article class="metric-card metric-card--warning">
-        <span>Base currency</span>
-        <strong class="metric-value font-mono">{{ reporting_base_currency }}</strong>
-        <small>All USD totals use converted values.</small>
+        <span>Withdrawal · Month</span>
+        <strong class="metric-value font-mono">${{ metrics.cash_flows.month_withdrawals_usd|floatformat:2 }}</strong>
+        <small>External outflows this month.</small>
+    </article>
+    <article class="metric-card metric-card--success">
+        <span>Deposit · Year</span>
+        <strong class="metric-value font-mono">${{ metrics.cash_flows.year_deposits_usd|floatformat:2 }}</strong>
+        <small>Calendar year to {{ metrics.cash_flows.as_of_date|display_date }}.</small>
+    </article>
+    <article class="metric-card metric-card--warning">
+        <span>Withdrawal · Year</span>
+        <strong class="metric-value font-mono">${{ metrics.cash_flows.year_withdrawals_usd|floatformat:2 }}</strong>
+        <small>External outflows this year.</small>
     </article>
 </section>

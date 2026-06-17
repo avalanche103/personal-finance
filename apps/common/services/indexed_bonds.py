@@ -115,6 +115,25 @@ def is_indexed_bond(product: Product) -> bool:
 	)
 
 
+def indexed_bond_market_value_usd(product: Product, units: Decimal | None = None) -> Decimal | None:
+	if not is_indexed_bond(product):
+		return None
+	held_units = units if units is not None else (product.units or Decimal('0'))
+	face_value_usd = Decimal(str(product.metadata.get('face_value_usd')))
+	return (held_units * face_value_usd).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def resolve_product_market_value_usd(product: Product, *, units: Decimal | None = None) -> Decimal:
+	indexed_value = indexed_bond_market_value_usd(product, units)
+	if indexed_value is not None:
+		return indexed_value
+	total_units = product.units or Decimal('0')
+	current_value_usd = product.current_value_usd or Decimal('0')
+	if units is not None and total_units > 0 and units != total_units:
+		return (current_value_usd * units / total_units).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	return current_value_usd
+
+
 def latest_usd_byn_rate(*, on_date: date | None = None) -> Decimal | None:
 	reference = on_date or timezone.localdate()
 	row = ExchangeRateHistory.objects.filter(

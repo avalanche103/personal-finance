@@ -1,6 +1,6 @@
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.db.models import DecimalField, Sum, Value
@@ -12,13 +12,13 @@ from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.accounts.analytics import build_dashboard_balance_rows
 from apps.accounts.querysets import (
 	is_portfolio_holding_account,
-	portfolio_holding_account_queryset,
 	visible_account_queryset,
 )
 from apps.accounts.services.balance import calculate_account_balance_as_of
 from apps.common.dates import format_display_date
 from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
+from apps.common.services.ledger import TRANSFER_LEG_METADATA_KEY, TRANSFER_PAIR_METADATA_KEY
 from apps.imports.models import ImportJob
 from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import (
@@ -69,13 +69,13 @@ class PortfolioHistoryCache:
 
     @classmethod
     def build(cls) -> 'PortfolioHistoryCache':
-        accounts = list(portfolio_holding_account_queryset())
-        products = list(Product.objects.select_related('institution', 'currency').all())
-        insurance_product_ids = [
-            product.id
-            for product in products
-            if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE)
+        accounts = [
+            account
+            for account in Account.objects.select_related('institution', 'currency').all()
+            if is_portfolio_holding_account(account)
         ]
+        products = list(Product.objects.select_related('institution', 'currency').all())
+        product_ids = [product.id for product in products]
         account_snapshots: dict[int, list[BalanceSnapshot]] = defaultdict(list)
         for snapshot in BalanceSnapshot.objects.filter(account_id__isnull=False).order_by(
             'account_id',
@@ -101,7 +101,7 @@ class PortfolioHistoryCache:
         return cls(
             accounts=accounts,
             products=products,
-            transaction_map=build_product_transaction_map(insurance_product_ids),
+            transaction_map=build_product_transaction_map(product_ids),
             account_snapshots=dict(account_snapshots),
             product_snapshots=dict(product_snapshots),
             exchange_rates_by_code=dict(exchange_rates_by_code),
@@ -255,6 +255,92 @@ def _portfolio_chart_context(
     }
 
 
+@dataclass(frozen=True)
+class CashFlowTotals:
+	month_deposits_usd: Decimal
+	month_withdrawals_usd: Decimal
+	year_deposits_usd: Decimal
+	year_withdrawals_usd: Decimal
+	as_of_date: date
+
+
+def _is_internal_transfer_leg(transaction: Transaction) -> bool:
+	metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+	return bool(metadata.get(TRANSFER_PAIR_METADATA_KEY) and metadata.get(TRANSFER_LEG_METADATA_KEY))
+
+
+def _transaction_flow_usd(transaction: Transaction, rate_cache: dict) -> Decimal:
+	amount_usd = transaction.amount_usd or Decimal('0')
+	if amount_usd:
+		return amount_usd
+	amount = transaction.amount or Decimal('0')
+	if not amount:
+		return Decimal('0')
+	tx_date = timezone.localtime(transaction.occurred_at).date()
+	rate = get_usd_conversion_rate(transaction.currency, tx_date, rate_cache)
+	return amount * rate
+
+
+def _transaction_cash_flow_usd(transaction: Transaction, rate_cache: dict) -> tuple[Decimal, Decimal]:
+	"""Return (deposits_usd, withdrawals_usd) as positive magnitudes."""
+	if _is_internal_transfer_leg(transaction):
+		return Decimal('0'), Decimal('0')
+
+	amount = transaction.amount or Decimal('0')
+	usd = _transaction_flow_usd(transaction, rate_cache)
+	tx_type = transaction.transaction_type
+
+	if tx_type == Transaction.TransactionType.DEPOSIT and amount > 0:
+		return abs(usd), Decimal('0')
+	if tx_type == Transaction.TransactionType.WITHDRAWAL and amount < 0:
+		return Decimal('0'), abs(usd)
+	if tx_type == Transaction.TransactionType.TRANSFER:
+		if amount > 0:
+			return abs(usd), Decimal('0')
+		if amount < 0:
+			return Decimal('0'), abs(usd)
+	return Decimal('0'), Decimal('0')
+
+
+def _build_deposit_withdrawal_totals(as_of_date: date | None = None) -> CashFlowTotals:
+	as_of_date = as_of_date or timezone.localdate()
+	month_start = timezone.make_aware(datetime.combine(as_of_date.replace(day=1), time.min))
+	year_start = timezone.make_aware(datetime.combine(date(as_of_date.year, 1, 1), time.min))
+	end_of_day = timezone.make_aware(datetime.combine(as_of_date + timedelta(days=1), time.min))
+
+	month_deposits = Decimal('0')
+	month_withdrawals = Decimal('0')
+	year_deposits = Decimal('0')
+	year_withdrawals = Decimal('0')
+	rate_cache: dict = {}
+
+	transactions = Transaction.objects.filter(
+		occurred_at__gte=year_start,
+		occurred_at__lt=end_of_day,
+		transaction_type__in=[
+			Transaction.TransactionType.DEPOSIT,
+			Transaction.TransactionType.WITHDRAWAL,
+			Transaction.TransactionType.TRANSFER,
+		],
+	).select_related('currency')
+
+	for ledger_transaction in transactions:
+		deposits_usd, withdrawals_usd = _transaction_cash_flow_usd(ledger_transaction, rate_cache)
+		year_deposits += deposits_usd
+		year_withdrawals += withdrawals_usd
+		if ledger_transaction.occurred_at >= month_start:
+			month_deposits += deposits_usd
+			month_withdrawals += withdrawals_usd
+
+	return CashFlowTotals(
+		month_deposits_usd=month_deposits,
+		month_withdrawals_usd=month_withdrawals,
+		year_deposits_usd=year_deposits,
+		year_withdrawals_usd=year_withdrawals,
+		as_of_date=as_of_date,
+	)
+
+
 def _dashboard_metrics():
     account_total = Account.objects.aggregate(
         total=Coalesce(Sum('current_balance_usd'), Value(0), output_field=DecimalField(max_digits=20, decimal_places=2))
@@ -262,12 +348,14 @@ def _dashboard_metrics():
     product_total = Product.objects.aggregate(
         total=Coalesce(Sum('current_value_usd'), Value(0), output_field=DecimalField(max_digits=20, decimal_places=2))
     )['total']
+    cash_flows = _build_deposit_withdrawal_totals()
 
     return {
         'institutions_count': FinancialInstitution.objects.count(),
         'accounts_count': Account.objects.count(),
         'products_count': Product.objects.filter(is_active=True).count(),
         'portfolio_usd': account_total + product_total,
+        'cash_flows': cash_flows,
     }
 
 
@@ -379,6 +467,92 @@ def _portfolio_product_group_values(
     return grouped
 
 
+def _deposit_linked_account_ids(products: list[Product]) -> set[int]:
+    return {
+        product.income_account_id
+        for product in products
+        if product.product_type == Product.ProductType.DEPOSIT and product.income_account_id
+    }
+
+
+def _comparison_group_key_for_institution(institution) -> tuple[str, str]:
+    slug = institution.slug
+    if slug == 'finstore':
+        return 'finstore', 'Finstore'
+    if slug in {'binance', 'bynex'}:
+        return 'crypto', 'Binance + BYNEX'
+    if slug == 'aigenis':
+        return 'aigenis', 'Aigenis'
+    if slug == 'priorlife':
+        return 'priorlife', 'Priorlife'
+    if slug == 'stravita':
+        return 'stravita', 'Stravita'
+    return f'institution:{institution.id}', institution.name
+
+
+def _comparison_group_row_defaults(group_key: str, label: str, institution=None) -> dict:
+    custom_groups = {
+        'deposits': {'initials': 'DP', 'accent': '#0D9488'},
+        'crypto': {'initials': 'CR', 'accent': '#F59E0B'},
+    }
+    custom = custom_groups.get(group_key, {})
+    return {
+        'label': label,
+        'institution': institution,
+        'currency': None,
+        'group_initials': custom.get('initials', ''),
+        'group_accent': custom.get('accent', '#64748B'),
+        'is_deposit_group': group_key == 'deposits',
+        'value_usd': Decimal('0'),
+    }
+
+
+def _portfolio_comparison_group_values(
+    as_of_date,
+    *,
+    portfolio_cache: PortfolioHistoryCache,
+    rate_cache: dict | None = None,
+) -> OrderedDict[str, dict]:
+    rate_cache = rate_cache if rate_cache is not None else {}
+    grouped: OrderedDict[str, dict] = OrderedDict()
+    deposit_account_ids = _deposit_linked_account_ids(portfolio_cache.products)
+
+    for account in portfolio_cache.accounts:
+        if account.id in deposit_account_ids:
+            group_key, label = 'deposits', 'Deposits + bank accounts'
+            institution = None
+        else:
+            group_key, label = _comparison_group_key_for_institution(account.institution)
+            institution = None if group_key == 'crypto' else account.institution
+        if group_key not in grouped:
+            grouped[group_key] = _comparison_group_row_defaults(group_key, label, institution=institution)
+        grouped[group_key]['value_usd'] += _account_value_as_of(
+            account,
+            as_of_date,
+            rate_cache,
+            portfolio_cache=portfolio_cache,
+        )
+
+    for product in portfolio_cache.products:
+        if product.product_type == Product.ProductType.DEPOSIT:
+            group_key, label = 'deposits', 'Deposits + bank accounts'
+            institution = None
+        else:
+            group_key, label = _comparison_group_key_for_institution(product.institution)
+            institution = None if group_key == 'crypto' else product.institution
+        if group_key not in grouped:
+            grouped[group_key] = _comparison_group_row_defaults(group_key, label, institution=institution)
+        grouped[group_key]['value_usd'] += _product_value_as_of(
+            product,
+            as_of_date,
+            rate_cache,
+            transaction_map=portfolio_cache.transaction_map,
+            portfolio_cache=portfolio_cache,
+        )
+
+    return grouped
+
+
 def _comparison_breakdown_rows(
     current_groups: dict,
     baseline_groups: dict,
@@ -425,6 +599,11 @@ def _build_portfolio_period_comparisons(
         portfolio_cache=portfolio_cache,
         rate_cache=current_rate_cache,
     )
+    current_comparison_groups = _portfolio_comparison_group_values(
+        as_of_date,
+        portfolio_cache=portfolio_cache,
+        rate_cache=current_rate_cache,
+    )
     comparisons = []
     for key, label, reference_date in (
         ('prev_day', 'Previous day', _previous_day(as_of_date)),
@@ -443,6 +622,11 @@ def _build_portfolio_period_comparisons(
             portfolio_cache=portfolio_cache,
             rate_cache=baseline_rate_cache,
         )
+        baseline_comparison_groups = _portfolio_comparison_group_values(
+            reference_date,
+            portfolio_cache=portfolio_cache,
+            rate_cache=baseline_rate_cache,
+        )
         comparisons.append(
             {
                 'key': key,
@@ -451,6 +635,7 @@ def _build_portfolio_period_comparisons(
                 'portfolio': _value_change(current['portfolio_usd'], baseline['portfolio_usd']),
                 'accounts': _value_change(current['accounts_total_usd'], baseline['accounts_total_usd']),
                 'products': _value_change(current['products_total_usd'], baseline['products_total_usd']),
+                'breakdown_groups': _comparison_breakdown_rows(current_comparison_groups, baseline_comparison_groups),
                 'breakdown_products': _comparison_breakdown_rows(current_product_groups, baseline_product_groups),
                 'breakdown_accounts': _comparison_breakdown_rows(current_account_groups, baseline_account_groups),
             }
@@ -490,6 +675,20 @@ def _product_market_value_native(product: Product, *, units: Decimal) -> Decimal
     if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
         return units
     return units * (product.current_price or Decimal('0'))
+
+
+def _product_units_from_transactions_as_of(
+    product: Product,
+    as_of_date,
+    transaction_map: dict[int, list[Transaction]] | None,
+) -> Decimal | None:
+    if transaction_map is None or product.id not in transaction_map:
+        return None
+    return sum(
+        (transaction.quantity or Decimal('0'))
+        for transaction in transaction_map.get(product.id, [])
+        if timezone.localtime(transaction.occurred_at).date() <= as_of_date
+    )
 
 
 def _product_value_as_of(
@@ -539,11 +738,11 @@ def _product_value_as_of(
                 )
         return native_value * rate
 
+    effective_transaction_map = transaction_map or (portfolio_cache.transaction_map if portfolio_cache else None)
     if portfolio_cache is not None:
-        units = _balance_snapshot_as_of(
+        snapshot = _latest_balance_snapshot_as_of(
             portfolio_cache.product_snapshots.get(product.id, []),
             as_of_date,
-            product.units or Decimal('0'),
         )
     else:
         snapshot = (
@@ -551,7 +750,16 @@ def _product_value_as_of(
             .order_by('-captured_at', '-id')
             .first()
         )
-        units = snapshot.balance if snapshot else (product.units or Decimal('0'))
+    if snapshot:
+        units = snapshot.balance
+    else:
+        units_from_transactions = _product_units_from_transactions_as_of(product, as_of_date, effective_transaction_map)
+        if units_from_transactions is not None:
+            units = units_from_transactions
+        elif timezone.localtime(product.created_at).date() > as_of_date:
+            units = Decimal('0')
+        else:
+            units = product.units or Decimal('0')
     return _product_market_value_native(product, units=units) * rate
 
 

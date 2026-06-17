@@ -7,9 +7,11 @@ venv/
 .venv/
 env/
 .env
+deploy/gcp/.env
 media/imports/
 data/raw/
 data/processed/
+data/cloud_fixture.json
 staticfiles/
 .mypy_cache/
 .pytest_cache/

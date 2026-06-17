@@ -9,6 +9,7 @@ from apps.accounts.models import Account, Transaction
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
 from apps.imports.models import ImportJob, ImportSource
+from apps.products.models import Product
 
 
 class AccountViewsTests(TestCase):
@@ -105,6 +106,138 @@ class AccountViewsTests(TestCase):
         self.assertContains(list_response, reverse('accounts:create'))
         self.assertContains(list_response, reverse('accounts:transaction_create'))
         self.assertNotContains(list_response, '/admin/accounts/account/add/')
+
+    def test_deposit_top_up_moves_cash_into_linked_deposit_product(self):
+        bank = FinancialInstitution.objects.create(
+            name='BNB Bank',
+            slug='bnb-bank-test',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        income_account = Account.objects.create(
+            institution=bank,
+            name='BNB BYN',
+            account_type=Account.AccountType.BANK,
+            currency=self.byn,
+            current_balance=Decimal('11.07'),
+            current_balance_usd=Decimal('3.43'),
+        )
+        deposit = Product.objects.create(
+            institution=bank,
+            income_account=income_account,
+            name='BNB2 test',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.byn,
+            units=Decimal('1115.04'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('345.66'),
+            external_id='test-bnb2',
+            metadata={'interest_mode': 'capitalized'},
+        )
+        Transaction.objects.create(
+            account=income_account,
+            product=deposit,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=self.byn,
+            import_fingerprint='manual:deposit-opening',
+            amount=Decimal('1115.04'),
+            amount_usd=Decimal('345.66'),
+            quantity=Decimal('1115.04'),
+            unit_price=Decimal('1'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 5, 1, 12, 0)),
+            description='Opening deposit',
+            metadata={'exclude_from_account_balance': True, 'operation_kind': 'opening'},
+        )
+        Transaction.objects.create(
+            account=income_account,
+            transaction_type=Transaction.TransactionType.TRANSFER,
+            currency=self.byn,
+            import_fingerprint='manual:deposit-top-up-transfer',
+            amount=Decimal('11.07'),
+            amount_usd=Decimal('3.43'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 11, 16, 50)),
+            description='Incoming transfer',
+        )
+
+        response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': income_account.pk,
+                'related_account': '',
+                'product': deposit.pk,
+                'transaction_type': Transaction.TransactionType.DEPOSIT,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '11.07',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-11T17:00',
+                'description': 'Top up BNB2',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        ledger_transaction = Transaction.objects.get(description='Top up BNB2')
+        self.assertEqual(ledger_transaction.amount, Decimal('-11.07'))
+        self.assertEqual(ledger_transaction.quantity, Decimal('11.07'))
+        self.assertTrue(ledger_transaction.metadata.get('operation_kind'), 'top_up')
+        income_account.refresh_from_db()
+        deposit.refresh_from_db()
+        self.assertEqual(income_account.current_balance, Decimal('0'))
+        self.assertEqual(deposit.units, Decimal('1126.11'))
+
+    def test_transfer_create_posts_outgoing_and_incoming_legs(self):
+        source = Account.objects.get(name='Checking')
+        destination = Account.objects.create(
+            institution=self.alfa,
+            name='Savings BYN',
+            account_type=Account.AccountType.BANK,
+            currency=self.byn,
+            current_balance=Decimal('0'),
+            current_balance_usd=Decimal('0'),
+        )
+        Transaction.objects.create(
+            account=source,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=self.byn,
+            import_fingerprint='manual:transfer-source-funding',
+            amount=Decimal('11.07'),
+            amount_usd=Decimal('3.43'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 11, 12, 0)),
+            description='Opening balance',
+        )
+        source.current_balance = Decimal('11.07')
+        source.save(update_fields=['current_balance'])
+
+        response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': source.pk,
+                'related_account': destination.pk,
+                'product': '',
+                'transaction_type': Transaction.TransactionType.TRANSFER,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '11.07',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-11T16:50',
+                'description': 'Move to savings',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        legs = list(Transaction.objects.filter(description='Move to savings').order_by('amount'))
+        self.assertEqual(len(legs), 2)
+        self.assertEqual(legs[0].amount, Decimal('-11.07'))
+        self.assertEqual(legs[1].amount, Decimal('11.07'))
+        self.assertEqual(legs[0].related_account_id, destination.pk)
+        self.assertEqual(legs[1].related_account_id, source.pk)
+        source.refresh_from_db()
+        destination.refresh_from_db()
+        self.assertEqual(source.current_balance, Decimal('0'))
+        self.assertEqual(destination.current_balance, Decimal('11.07'))
 
     def test_transaction_create_generates_fingerprint_and_syncs_balance(self):
         account = Account.objects.get(name='Checking')

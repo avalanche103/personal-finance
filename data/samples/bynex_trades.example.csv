@@ -1,0 +1,2 @@
+occurred_at,side,base_asset,quote_currency,quantity,price,fee,total,external_id
+2026-06-10 19:00:00,buy,USDT,USD,268.371,1.00411,0.06736,269.54137,bynex-usdt-buy-2026-06-10

@@ -31,13 +31,16 @@ def apply_aigenis_indexed_bond_defaults(product: Product, *, save: bool = True) 
 		return False
 
 	income_account = get_alfabank_byn_account()
-	metadata = dict(product.metadata or {})
-	metadata['bond_kind'] = 'indexed'
-	product.metadata = metadata
-	product.income_account = income_account
-	if save:
-		product.save(update_fields=['metadata', 'income_account', 'updated_at'])
-	return True
+	if income_account is not None:
+		product.income_account = income_account
+
+	from apps.common.services.indexed_bonds import configure_aigenis_indexed_bond
+
+	if not save:
+		return configure_aigenis_indexed_bond(product, preserve_user_payments=True)
+	if income_account is not None and product.income_account_id != income_account.id:
+		product.save(update_fields=['income_account', 'updated_at'])
+	return configure_aigenis_indexed_bond(product, preserve_user_payments=True)
 
 
 def configure_aigenis_indexed_bonds(institution: FinancialInstitution | None = None) -> int:

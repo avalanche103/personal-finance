@@ -1,0 +1,2 @@
+DJANGO_CSRF_TRUSTED_ORIGINS: "https://personal-finance-vn4htzffoq-lm.a.run.app,https://personal-finance-506591766814.europe-central2.run.app"
+DJANGO_ALLOWED_HOSTS: "personal-finance-vn4htzffoq-lm.a.run.app,personal-finance-506591766814.europe-central2.run.app,.run.app"

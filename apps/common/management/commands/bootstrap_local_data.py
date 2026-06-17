@@ -222,6 +222,16 @@ class Command(BaseCommand):
 			},
 		)
 		ImportSource.objects.update_or_create(
+			code='bynex-manual-trades',
+			defaults={
+				'institution': bynex,
+				'name': 'BYNEX Manual Trades',
+				'source_type': ImportSource.SourceType.MANUAL,
+				'is_active': True,
+				'config': {'parser': 'bynex-manual-trades', 'bootstrap': True},
+			},
+		)
+		ImportSource.objects.update_or_create(
 			code='stravita-extract',
 			defaults={
 				'institution': stravita,
@@ -353,18 +363,26 @@ class Command(BaseCommand):
 			belarusbank_byn_account.currency = byn
 			belarusbank_byn_account.save(update_fields=['account_type', 'currency', 'updated_at'])
 
-		Account.objects.get_or_create(
+		bynex_usd_account, created = Account.objects.get_or_create(
 			institution=bynex,
 			name='BYNEX USD Account',
 			defaults={
 				'account_type': Account.AccountType.WALLET,
 				'currency': usd,
+				'external_id': 'bynex:wallet:USD',
 				'current_balance': Decimal('0.00'),
 				'current_balance_usd': Decimal('0.00'),
-				'metadata': {'bootstrap': True},
+				'metadata': {'bootstrap': True, 'source': 'bynex', 'wallet': 'main', 'asset': 'USD'},
 			},
 		)
-		bynex_usd_account = Account.objects.get(institution=bynex, name='BYNEX USD Account')
+		if not created:
+			bynex_usd_account.account_type = Account.AccountType.WALLET
+			bynex_usd_account.currency = usd
+			bynex_usd_account.external_id = bynex_usd_account.external_id or 'bynex:wallet:USD'
+			metadata = dict(bynex_usd_account.metadata or {})
+			metadata.update({'bootstrap': True, 'source': 'bynex', 'wallet': 'main', 'asset': 'USD'})
+			bynex_usd_account.metadata = metadata
+			bynex_usd_account.save(update_fields=['account_type', 'currency', 'external_id', 'metadata', 'updated_at'])
 		bnb_usd_account = Account.objects.get(institution=bnb_bank, name='БНБ-Банк USD Account')
 		for amount, occurred_at, date_key in [
 			(Decimal('50.46'), timezone.datetime(2026, 4, 25, 12, 0), '2026-04-25'),

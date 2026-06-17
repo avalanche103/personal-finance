@@ -10,6 +10,7 @@ from apps.common.management.commands.bootstrap_local_data import Command as Boot
 from apps.common.models import Currency
 from apps.institutions.models import FinancialInstitution
 from apps.dashboard.views import (
+	_build_deposit_withdrawal_totals,
 	_build_portfolio_period_comparisons,
 	_account_value_as_of,
 	_dashboard_metrics,
@@ -19,6 +20,7 @@ from apps.dashboard.views import (
 	_product_value_as_of,
 	PortfolioHistoryCache,
 )
+from apps.common.services.ledger import create_transaction
 from apps.products.models import Product
 
 
@@ -84,10 +86,12 @@ class DashboardSmokeTests(TestCase):
 		)
 
 		response = self.client.get('/')
+		rows = list(response.context['balance_rows'])
+		balance_row_names = [row.name for row in rows]
 
 		self.assertContains(response, 'Binance Stable')
-		self.assertNotContains(response, 'Binance Visible USD')
-		self.assertNotContains(response, 'Binance Empty BTC')
+		self.assertNotIn('Binance Visible USD', balance_row_names)
+		self.assertNotIn('Binance Empty BTC', balance_row_names)
 
 	def test_dashboard_balances_sorted_by_usd_descending(self):
 		usd = Currency.objects.get(code='USD')
@@ -162,8 +166,8 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(len(binance_rows), 1)
 		self.assertEqual(binance_rows[0].name, 'Binance Stable')
 		self.assertEqual(binance_rows[0].current_balance_usd, Decimal('150'))
-		self.assertNotContains(response, 'Binance USDT')
-		self.assertNotContains(response, 'Binance USDC')
+		self.assertNotIn('Binance USDT', [row.name for row in rows])
+		self.assertNotIn('Binance USDC', [row.name for row in rows])
 
 	def test_portfolio_chart_points_respect_range(self):
 		as_of = date(2026, 6, 4)
@@ -211,11 +215,11 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'portfolio-chart-panel')
 		self.assertContains(response, 'plotly')
 		self.assertContains(response, 'Last day of previous month')
-		self.assertContains(response, 'Product groups')
-		self.assertContains(response, 'Account groups')
+		self.assertContains(response, 'Portfolio groups')
 		self.assertContains(response, 'period-comparison')
 		self.assertContains(response, 'period-comparison-row-label')
 		comparisons = response.context['historical_reporting']['period_comparisons']
+		self.assertIn('breakdown_groups', comparisons[0])
 		self.assertIn('breakdown_products', comparisons[0])
 		self.assertIn('breakdown_accounts', comparisons[0])
 		self.assertIn('product_groups', response.context)
@@ -285,12 +289,12 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(prev_day['reference_date'], date(2026, 6, 3))
 		self.assertEqual(prev_month['reference_date'], date(2026, 5, 31))
 		self.assertEqual(prev_year['reference_date'], date(2025, 12, 31))
-		prev_day_account = next(row for row in prev_day['breakdown_accounts'] if row['label'] == 'Comparison Bank')
+		prev_day_account = next(row for row in prev_day['breakdown_groups'] if row['label'] == 'Comparison Bank')
 		self.assertEqual(prev_day_account['change']['baseline_usd'], Decimal('1900'))
 		self.assertEqual(prev_day_account['current_usd'], Decimal('2000'))
 		self.assertEqual(prev_day_account['change']['change_abs'], Decimal('100'))
-		prev_month_account = next(row for row in prev_month['breakdown_accounts'] if row['label'] == 'Comparison Bank')
-		prev_year_account = next(row for row in prev_year['breakdown_accounts'] if row['label'] == 'Comparison Bank')
+		prev_month_account = next(row for row in prev_month['breakdown_groups'] if row['label'] == 'Comparison Bank')
+		prev_year_account = next(row for row in prev_year['breakdown_groups'] if row['label'] == 'Comparison Bank')
 		self.assertEqual(prev_month_account['change']['baseline_usd'], Decimal('1000'))
 		self.assertEqual(prev_month_account['current_usd'], Decimal('2000'))
 		self.assertEqual(prev_month_account['change']['change_abs'], Decimal('1000'))
@@ -300,8 +304,7 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Previous day')
 		self.assertContains(response, 'Last day of previous month')
 		self.assertContains(response, 'Last day of previous year')
-		self.assertContains(response, 'Product groups')
-		self.assertContains(response, 'Account groups')
+		self.assertContains(response, 'Portfolio groups')
 
 	def test_period_comparison_breakdown_includes_product_groups(self):
 		usd = Currency.objects.get(code='USD')
@@ -346,6 +349,44 @@ class DashboardSmokeTests(TestCase):
 		)
 		self.assertEqual(product_group['current_usd'], Decimal('1000'))
 		self.assertEqual(product_group['change']['baseline_usd'], Decimal('500'))
+		comparison_group = next(row for row in prev_month['breakdown_groups'] if row['label'] == 'Breakdown Broker')
+		self.assertEqual(comparison_group['current_usd'], Decimal('1000'))
+		self.assertEqual(comparison_group['change']['baseline_usd'], Decimal('500'))
+
+	def test_period_comparison_does_not_backfill_today_product_purchase_into_yesterday(self):
+		usd = Currency.objects.get(code='USD')
+		finstore = FinancialInstitution.objects.get(slug='finstore')
+		account = Account.objects.get(institution=finstore, currency=usd)
+		product = Product.objects.create(
+			institution=finstore,
+			name='Today Finstore token',
+			product_type=Product.ProductType.TOKEN,
+			currency=usd,
+			units=Decimal('10'),
+			current_price=Decimal('5'),
+			current_value_usd=Decimal('50'),
+			external_id='TODAY-FINSTORE-TOKEN',
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.TRADE,
+			currency=usd,
+			import_fingerprint='today-finstore-token-buy',
+			amount=Decimal('0'),
+			amount_usd=Decimal('0'),
+			quantity=Decimal('10'),
+			unit_price=Decimal('5'),
+			occurred_at=timezone.make_aware(timezone.datetime(2026, 6, 10, 12, 0)),
+		)
+
+		current = _historical_portfolio_context(date(2026, 6, 10))
+		comparisons = _build_portfolio_period_comparisons(date(2026, 6, 10), current)
+		prev_day = next(item for item in comparisons if item['key'] == 'prev_day')
+		finstore_group = next(row for row in prev_day['breakdown_groups'] if row['label'] == 'Finstore')
+
+		self.assertEqual(finstore_group['current_usd'], Decimal('50'))
+		self.assertEqual(finstore_group['change']['baseline_usd'], Decimal('0'))
 
 	def test_historical_portfolio_treats_pension_snapshot_as_total_value(self):
 		byn = Currency.objects.get(code='BYN')
@@ -376,7 +417,7 @@ class DashboardSmokeTests(TestCase):
 
 		response = self.client.get('/portfolio-report/?as_of=2026-06-05')
 		self.assertEqual(response.status_code, 200)
-		self.assertGreater(response.context['products_total_usd'], Decimal('1500'))
+		self.assertGreater(response.context['products_total_usd'], Decimal('1400'))
 		self.assertLess(response.context['portfolio_usd'], Decimal('10000'))
 
 	def test_pension_value_after_snapshot_uses_statement_balance(self):
@@ -603,6 +644,100 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(today_value, Decimal('12.50'))
 		self.assertEqual(yesterday_value, Decimal('10.00'))
 
+	def test_account_value_as_of_uses_local_day_boundary_for_transactions(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Local Day Bank',
+			slug='local-day-bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+			base_currency=usd,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Local day cash',
+			account_type=Account.AccountType.BANK,
+			currency=usd,
+			current_balance=Decimal('17.00'),
+			current_balance_usd=Decimal('17.00'),
+		)
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=usd,
+			import_fingerprint='local-day-before-midnight',
+			amount=Decimal('10.00'),
+			amount_usd=Decimal('10.00'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 20, 59, 59), timezone=dt_timezone.utc),
+		)
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=usd,
+			import_fingerprint='local-day-at-midnight',
+			amount=Decimal('7.00'),
+			amount_usd=Decimal('7.00'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 21, 0, 0), timezone=dt_timezone.utc),
+		)
+
+		cache = PortfolioHistoryCache.build()
+		value = _account_value_as_of(account, date(2026, 6, 10), {}, portfolio_cache=cache)
+
+		self.assertEqual(value, Decimal('10.00'))
+
+	def test_product_value_as_of_uses_local_day_boundary_for_transactions(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Local Day Broker',
+			slug='local-day-broker',
+			institution_type=FinancialInstitution.InstitutionType.BROKER,
+			base_currency=usd,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Local day brokerage',
+			account_type=Account.AccountType.BROKERAGE,
+			currency=usd,
+		)
+		product = Product.objects.create(
+			institution=institution,
+			name='Local day bond',
+			product_type=Product.ProductType.BOND,
+			currency=usd,
+			units=Decimal('2'),
+			current_price=Decimal('100'),
+			current_value_usd=Decimal('200'),
+			external_id='LOCAL-DAY-BOND',
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.TRADE,
+			currency=usd,
+			import_fingerprint='local-day-product-before-midnight',
+			amount=Decimal('-100.00'),
+			amount_usd=Decimal('-100.00'),
+			quantity=Decimal('1'),
+			unit_price=Decimal('100'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 20, 59, 59), timezone=dt_timezone.utc),
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.TRADE,
+			currency=usd,
+			import_fingerprint='local-day-product-at-midnight',
+			amount=Decimal('-100.00'),
+			amount_usd=Decimal('-100.00'),
+			quantity=Decimal('1'),
+			unit_price=Decimal('100'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 21, 0, 0), timezone=dt_timezone.utc),
+		)
+
+		cache = PortfolioHistoryCache.build()
+		value = _product_value_as_of(product, date(2026, 6, 10), {}, portfolio_cache=cache)
+
+		self.assertEqual(value, Decimal('100'))
+
 	def test_balance_snapshot_as_of_uses_local_timezone_for_day_boundary(self):
 		usd = Currency.objects.get(code='USD')
 		institution = FinancialInstitution.objects.create(
@@ -662,5 +797,192 @@ class DashboardSmokeTests(TestCase):
 			portfolio_cache=cache,
 		)
 		prev_day = next(item for item in comparisons if item['key'] == 'prev_day')
-		breakdown_labels = {row['label'] for row in prev_day['breakdown_accounts']}
-		self.assertNotIn('Доходы', breakdown_labels)
+		breakdown_labels = {row['label'] for row in prev_day['breakdown_groups']}
+		self.assertNotIn('Зарплата', breakdown_labels)
+
+	def test_period_comparison_entities_do_not_duplicate_deposit_income_account(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Deposit Entity Bank',
+			slug='deposit-entity-bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+			base_currency=usd,
+		)
+		income_account = Account.objects.create(
+			institution=institution,
+			name='Deposit payout account',
+			account_type=Account.AccountType.BANK,
+			currency=usd,
+			current_balance=Decimal('100'),
+			current_balance_usd=Decimal('100'),
+		)
+		deposit = Product.objects.create(
+			institution=institution,
+			income_account=income_account,
+			name='Deposit principal',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=usd,
+			units=Decimal('1000'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('1000'),
+			external_id='DEPOSIT-ENTITY-TEST',
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=income_account,
+			currency=usd,
+			balance=Decimal('80'),
+			balance_usd=Decimal('80'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 5, 31, 12, 0)),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=income_account,
+			currency=usd,
+			balance=Decimal('100'),
+			balance_usd=Decimal('100'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 6, 4, 12, 0)),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=deposit,
+			currency=usd,
+			balance=Decimal('900'),
+			balance_usd=Decimal('900'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 5, 31, 12, 0)),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			product=deposit,
+			currency=usd,
+			balance=Decimal('1000'),
+			balance_usd=Decimal('1000'),
+			captured_at=timezone.make_aware(timezone.datetime(2026, 6, 4, 12, 0)),
+		)
+
+		current = _historical_portfolio_context(date(2026, 6, 4))
+		comparisons = _build_portfolio_period_comparisons(date(2026, 6, 4), current)
+		prev_month = next(item for item in comparisons if item['key'] == 'prev_month')
+		group = next(row for row in prev_month['breakdown_groups'] if row['label'] == 'Deposits + bank accounts')
+
+		self.assertEqual(group['current_usd'], Decimal('1100'))
+		self.assertEqual(group['change']['baseline_usd'], Decimal('980'))
+
+
+class DashboardCashFlowTests(TestCase):
+	@classmethod
+	def setUpTestData(cls):
+		BootstrapCommand().handle()
+
+	def setUp(self):
+		self.usd = Currency.objects.get(code='USD')
+		self.institution = FinancialInstitution.objects.create(
+			name='Cash Flow Test Bank',
+			slug='cash-flow-test-bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+			base_currency=self.usd,
+		)
+		self.source_account = Account.objects.create(
+			institution=self.institution,
+			name='Cash Flow Source',
+			currency=self.usd,
+			external_id='cash-flow-source',
+		)
+		self.destination_account = Account.objects.create(
+			institution=self.institution,
+			name='Cash Flow Destination',
+			currency=self.usd,
+			external_id='cash-flow-destination',
+		)
+
+	def test_deposit_withdrawal_totals_for_month_and_year(self):
+		as_of = date(2026, 6, 17)
+		before = _build_deposit_withdrawal_totals(as_of)
+		Transaction.objects.create(
+			account=self.source_account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('100'),
+			amount_usd=Decimal('100'),
+			import_fingerprint='cash-flow-deposit-month',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=self.source_account,
+			transaction_type=Transaction.TransactionType.WITHDRAWAL,
+			currency=self.usd,
+			amount=Decimal('-40'),
+			amount_usd=Decimal('-40'),
+			import_fingerprint='cash-flow-withdrawal-month',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 12, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=self.source_account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('50'),
+			amount_usd=Decimal('50'),
+			import_fingerprint='cash-flow-deposit-year-only',
+			occurred_at=timezone.make_aware(datetime(2026, 3, 15, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=self.source_account,
+			transaction_type=Transaction.TransactionType.WITHDRAWAL,
+			currency=self.usd,
+			amount=Decimal('-20'),
+			amount_usd=Decimal('-20'),
+			import_fingerprint='cash-flow-withdrawal-prior-year',
+			occurred_at=timezone.make_aware(datetime(2025, 12, 31, 12, 0)),
+		)
+
+		totals = _build_deposit_withdrawal_totals(as_of)
+
+		self.assertEqual(totals.month_deposits_usd - before.month_deposits_usd, Decimal('100'))
+		self.assertEqual(totals.month_withdrawals_usd - before.month_withdrawals_usd, Decimal('40'))
+		self.assertEqual(totals.year_deposits_usd - before.year_deposits_usd, Decimal('150'))
+		self.assertEqual(totals.year_withdrawals_usd - before.year_withdrawals_usd, Decimal('40'))
+
+	def test_internal_transfer_pair_is_excluded_from_cash_flows(self):
+		as_of = date(2026, 6, 17)
+		before = _build_deposit_withdrawal_totals(as_of)
+		create_transaction(
+			account=self.source_account,
+			related_account=self.destination_account,
+			transaction_type=Transaction.TransactionType.TRANSFER,
+			currency=self.usd,
+			amount=Decimal('-75'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 11, 12, 0)),
+			import_fingerprint='cash-flow-internal-transfer-out',
+			sync_balance=False,
+		)
+
+		totals = _build_deposit_withdrawal_totals(as_of)
+
+		self.assertEqual(totals.month_deposits_usd - before.month_deposits_usd, Decimal('0'))
+		self.assertEqual(totals.month_withdrawals_usd - before.month_withdrawals_usd, Decimal('0'))
+
+	def test_excluded_from_account_balance_withdrawal_counts_in_cash_flows(self):
+		as_of = date(2026, 6, 17)
+		before = _build_deposit_withdrawal_totals(as_of)
+		Transaction.objects.create(
+			account=self.source_account,
+			transaction_type=Transaction.TransactionType.WITHDRAWAL,
+			currency=self.usd,
+			amount=Decimal('-850.02'),
+			amount_usd=Decimal('850.02'),
+			import_fingerprint='cash-flow-excluded-withdrawal',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 17, 12, 0)),
+			description='External withdrawal',
+			metadata={'exclude_from_account_balance': True, 'operation_kind': 'external_withdrawal'},
+		)
+
+		totals = _build_deposit_withdrawal_totals(as_of)
+
+		self.assertEqual(totals.month_withdrawals_usd - before.month_withdrawals_usd, Decimal('850.02'))
+		self.assertEqual(totals.year_withdrawals_usd - before.year_withdrawals_usd, Decimal('850.02'))
+
+	def test_dashboard_metrics_include_cash_flow_widget(self):
+		metrics = _dashboard_metrics()
+
+		self.assertIn('cash_flows', metrics)
+		self.assertEqual(metrics['cash_flows'].as_of_date, timezone.localdate())

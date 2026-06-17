@@ -7,6 +7,7 @@ from django.db import transaction
 from apps.accounts.models import Transaction
 from apps.common.models import Currency
 from apps.common.services.exchange_rates import recalculate_usd_valuations
+from apps.common.services.finstore_operations import is_finstore_redemption_operation
 from apps.products.models import Product
 
 
@@ -80,10 +81,17 @@ def reconcile_finstore_products(institution_id: int | None = None, token_names: 
                 linked_transactions += 1
 
             operation_type = tx.metadata.get('operation_type', '') if isinstance(tx.metadata, dict) else ''
-            if operation_type == 'Возврат инвестиций' and (tx.quantity or Decimal('0')) > 0:
-                tx.quantity = -abs(tx.quantity)
-                tx.save(update_fields=['quantity', 'updated_at'])
-                normalized_transactions += 1
+            if is_finstore_redemption_operation(operation_type):
+                update_fields = ['updated_at']
+                if (tx.quantity or Decimal('0')) > 0:
+                    tx.quantity = -abs(tx.quantity)
+                    update_fields.append('quantity')
+                if tx.transaction_type != Transaction.TransactionType.INCOME:
+                    tx.transaction_type = Transaction.TransactionType.INCOME
+                    update_fields.append('transaction_type')
+                if len(update_fields) > 1:
+                    tx.save(update_fields=update_fields)
+                    normalized_transactions += 1
 
         grouped_transactions: dict[int, list[Transaction]] = {}
         for tx in token_transactions:

@@ -253,3 +253,78 @@ class Op51IndexedBondTests(TestCase):
 
 		self.assertEqual(self.product.current_value_usd, Decimal('427.96'))
 		self.assertEqual(self.product.current_price, Decimal('312.41080000'))
+
+	def test_indexed_bond_performance_uses_usd_face_value_not_fx_revaluation(self):
+		from apps.common.services.aigenis_bonds import apply_aigenis_indexed_bond_defaults
+		from apps.common.services.indexed_bonds import resolve_product_market_value_usd
+		from apps.products.analytics import build_product_performance_summary, build_product_position_summary
+
+		for index, payment_day in enumerate(
+			(date(2026, 4, 25), date(2026, 5, 8), date(2026, 5, 25)),
+			start=1,
+		):
+			Transaction.objects.create(
+				account=self.broker_account,
+				product=self.product,
+				currency=self.byn,
+				transaction_type=Transaction.TransactionType.TRADE,
+				amount=Decimal('-301.62') if index == 1 else Decimal('-604.70'),
+				amount_usd=Decimal('-107.57') if index == 1 else Decimal('-213.99'),
+				quantity=Decimal('1') if index != 2 else Decimal('2'),
+				unit_price=Decimal('301.62') if index == 1 else Decimal('302.35'),
+				occurred_at=timezone.make_aware(datetime.combine(payment_day, datetime.min.time())),
+				import_fingerprint=f'op51-performance-{index}',
+			)
+			Transaction.objects.create(
+				account=self.broker_account,
+				product=self.product,
+				currency=self.byn,
+				transaction_type=Transaction.TransactionType.FEE,
+				amount=Decimal('-1.04'),
+				amount_usd=Decimal('-0.37'),
+				quantity=Decimal('0'),
+				occurred_at=timezone.make_aware(datetime.combine(payment_day, datetime.min.time())),
+				import_fingerprint=f'op51-performance-fee-{index}',
+			)
+
+		apply_aigenis_indexed_bond_defaults(self.product)
+		self.product.refresh_from_db()
+		refresh_indexed_bond_valuation(self.product)
+
+		transactions = list(Transaction.objects.filter(product=self.product).order_by('occurred_at', 'id'))
+		baseline_market_value_usd = resolve_product_market_value_usd(self.product)
+		baseline_position = build_product_position_summary(
+			transactions,
+			self.product.market_value,
+			market_value_usd=baseline_market_value_usd,
+			currency=self.byn,
+			product_type=self.product.product_type,
+		)
+		baseline_performance = build_product_performance_summary(
+			transactions,
+			baseline_position,
+			as_of_date=date(2026, 6, 11),
+			product_type=self.product.product_type,
+		)
+
+		self.product.current_value_usd = Decimal('999.99')
+		self.product.save(update_fields=['current_value_usd', 'updated_at'])
+		fx_market_value_usd = resolve_product_market_value_usd(self.product)
+		fx_position = build_product_position_summary(
+			transactions,
+			self.product.market_value,
+			market_value_usd=fx_market_value_usd,
+			currency=self.byn,
+			product_type=self.product.product_type,
+		)
+		fx_performance = build_product_performance_summary(
+			transactions,
+			fx_position,
+			as_of_date=date(2026, 6, 11),
+			product_type=self.product.product_type,
+		)
+
+		self.assertEqual(baseline_market_value_usd, Decimal('427.96'))
+		self.assertEqual(fx_market_value_usd, Decimal('427.96'))
+		self.assertEqual(fx_performance['total_return_value'], baseline_performance['total_return_value'])
+		self.assertLess(baseline_performance['total_return_value'], Decimal('0'))

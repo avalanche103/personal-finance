@@ -20,13 +20,8 @@
 
             <div class="period-comparison-details stack-md">
                 <section class="period-comparison-section">
-                    <h3 class="eyebrow">Product groups</h3>
-                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_products show_currency=True empty_label='No product groups in this comparison.' only %}
-                </section>
-
-                <section class="period-comparison-section">
-                    <h3 class="eyebrow">Account groups</h3>
-                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_accounts show_currency=False empty_label='No account groups in this comparison.' only %}
+                    <h3 class="eyebrow">Portfolio groups</h3>
+                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_groups show_currency=False empty_label='No portfolio groups in this comparison.' only %}
                 </section>
             </div>
         </details>

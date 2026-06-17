@@ -20,7 +20,11 @@ from apps.common.services.priorlife_insurance import (
 	parse_priorlife_contributions,
 	spread_yield_by_contribution_months,
 )
-from apps.common.services.stravita_pension import parse_stravita_contributions, parse_stravita_extract
+from apps.common.services.stravita_pension import (
+	parse_stravita_contributions,
+	parse_stravita_extract,
+	spread_income_by_cumulative_contributions,
+)
 from apps.imports.models import ImportJob, ImportSource
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
 from apps.institutions.models import FinancialInstitution
@@ -170,6 +174,41 @@ class ImportPipelineSmokeTests(TestCase):
 
 		usd_account = Account.objects.get(institution=source.institution, currency__code='USD')
 		self.assertEqual(str(usd_account.current_balance), '110.00')
+
+	def test_finstore_early_redemption_closes_token_position(self):
+		source = ImportSource.objects.get(code='finstore-history')
+		workbook = BytesIO()
+		pd.DataFrame(
+			[
+				['История операций', '', '', '', ''],
+				['Вид операции', 'Название токена', 'Количество токенов', 'Сумма валюты', 'Дата'],
+				['Пополнение кошелька', '', '', '50 BYN.sc', '10.06.2026 10:00:00'],
+				['Покупка токенов', 'BLESAVARIS_(BYN_442)', '1', '50 BYN.sc', '01.05.2026 10:00:00'],
+				['Досрочное погашение токенов', 'BLESAVARIS_(BYN_442)', '1', '50 BYN.sc', '10.06.2026 10:00:00'],
+			]
+		).to_excel(workbook, index=False, header=False)
+		workbook.seek(0)
+
+		upload = SimpleUploadedFile(
+			'Finstore_early_redemption.xlsx',
+			workbook.getvalue(),
+			content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		)
+
+		job, created = process_uploaded_import(source, upload)
+		self.assertTrue(created)
+		self.assertEqual(job.status, ImportJob.Status.SAVED)
+
+		product = Product.objects.get(institution=source.institution, external_id='BLESAVARIS_(BYN_442)')
+		self.assertEqual(str(product.units), '0.000000')
+		self.assertFalse(product.is_active)
+		self.assertEqual(str(product.current_value_usd), '0.00')
+
+		redemption = Transaction.objects.get(import_job=job, metadata__operation_type='Досрочное погашение токенов')
+		self.assertEqual(redemption.product, product)
+		self.assertEqual(redemption.transaction_type, Transaction.TransactionType.INCOME)
+		self.assertEqual(str(redemption.amount), '50.00')
+		self.assertEqual(str(redemption.quantity), '-1.000000')
 
 	def test_finstore_clipboard_import_creates_income_transactions(self):
 		source = ImportSource.objects.get(code='finstore-history')
@@ -363,6 +402,20 @@ class StravitaPensionImportTests(TestCase):
 		self.assertEqual(result.metadata['rows'], 52)
 		self.assertEqual(result.metadata['account_number'], '3040282A000PB5')
 
+	def test_spread_stravita_income_by_cumulative_contributions(self):
+		contributions = {
+			(2024, 7): Decimal('75.36'),
+			(2024, 8): Decimal('150.72'),
+		}
+		rows = spread_income_by_cumulative_contributions(Decimal('30'), contributions)
+		self.assertEqual(len(rows), 2)
+		self.assertEqual(rows[0][0], date(2024, 7, 31))
+		self.assertEqual(rows[1][0], date(2024, 8, 31))
+		self.assertEqual(rows[0][1], Decimal('7.50'))
+		self.assertEqual(rows[1][1], Decimal('22.50'))
+		self.assertEqual(sum(amount for _, amount in rows), Decimal('30'))
+		self.assertGreater(rows[1][1], rows[0][1])
+
 	def test_import_stravita_pension_pipeline(self):
 		institution = FinancialInstitution.objects.get(slug='stravita')
 		extract_source = ImportSource.objects.get(code='stravita-extract')
@@ -398,13 +451,27 @@ class StravitaPensionImportTests(TestCase):
 		contributions = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.DEPOSIT)
 		self.assertEqual(contributions.count(), 52)
 		income = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.INCOME)
-		self.assertEqual(income.count(), 2)
+		months_with_contributions = {
+			tx.occurred_at.date().replace(day=1)
+			for tx in contributions.filter(occurred_at__date__lte='2026-05-01')
+		}
+		self.assertEqual(income.count(), len(months_with_contributions) * 2)
+		self.assertEqual(
+			sum(tx.amount for tx in income.filter(metadata__income_kind='insurance_bonus')),
+			Decimal('46.03'),
+		)
+		self.assertEqual(
+			sum(tx.amount for tx in income.filter(metadata__income_kind='refinancing_yield')),
+			Decimal('100.61'),
+		)
+		self.assertFalse(income.filter(occurred_at__date=date(2026, 5, 1)).exists())
+		self.assertTrue(all(tx.metadata.get('spread_accrual') for tx in income))
 
 		payroll_account = Account.objects.get(institution__slug='income-sources', name='Зарплата')
 		self.assertEqual(contributions.filter(account=payroll_account).count(), 52)
 
 		snapshot = BalanceSnapshot.objects.get(product=product)
-		self.assertEqual(str(snapshot.balance), '4815.42000000')
+		self.assertEqual(snapshot.balance, Decimal('4815.42'))
 
 		july_contribution = contributions.filter(occurred_at__date='2024-07-04', amount=Decimal('75.36')).first()
 		self.assertIsNotNone(july_contribution)

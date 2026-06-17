@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import calendar
 import hashlib
 import re
+from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -245,6 +247,125 @@ def _fingerprint(*parts: str) -> str:
 	return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 
+def _month_end(year: int, month: int) -> date:
+	return date(year, month, calendar.monthrange(year, month)[1])
+
+
+def spread_income_by_cumulative_contributions(
+	total_amount: Decimal,
+	monthly_contributions: dict[tuple[int, int], Decimal],
+) -> list[tuple[date, Decimal]]:
+	"""Allocate income across month-ends, weighted by cumulative contributions at each month-end."""
+	if total_amount <= 0 or not monthly_contributions:
+		return []
+
+	month_weights: list[tuple[tuple[int, int], Decimal]] = []
+	running_balance = Decimal('0')
+	for month_key, month_amount in sorted(monthly_contributions.items()):
+		running_balance += month_amount
+		month_weights.append((month_key, running_balance))
+
+	total_weight = sum(weight for _, weight in month_weights)
+	if total_weight <= 0:
+		return []
+
+	rows: list[tuple[date, Decimal]] = []
+	allocated = Decimal('0')
+	for index, ((year, month), weight) in enumerate(month_weights):
+		if index == len(month_weights) - 1:
+			amount = total_amount - allocated
+		else:
+			amount = (total_amount * weight / total_weight).quantize(Decimal('0.01'))
+			allocated += amount
+		if amount > 0:
+			rows.append((_month_end(year, month), amount))
+	return rows
+
+
+def _monthly_contribution_totals(product: Product, as_of_date: date) -> dict[tuple[int, int], Decimal]:
+	monthly: dict[tuple[int, int], Decimal] = defaultdict(lambda: Decimal('0'))
+	for tx in Transaction.objects.filter(
+		product=product,
+		transaction_type=Transaction.TransactionType.DEPOSIT,
+	):
+		tx_date = tx.occurred_at.date()
+		if tx_date > as_of_date:
+			continue
+		amount = tx.amount or Decimal('0')
+		if amount > 0:
+			monthly[(tx_date.year, tx_date.month)] += amount
+	return dict(monthly)
+
+
+def _sync_stravita_spread_income(
+	*,
+	product: Product,
+	account_number: str,
+	statement: dict,
+	payroll_account: Account,
+	byn: Currency,
+	as_of_date: date,
+	import_job,
+) -> int:
+	monthly_totals = _monthly_contribution_totals(product, as_of_date)
+	if not monthly_totals:
+		return 0
+
+	as_of_raw = statement.get('as_of_date', '') or as_of_date.isoformat()
+	Transaction.objects.filter(
+		product=product,
+		transaction_type=Transaction.TransactionType.INCOME,
+		metadata__imported_from='stravita-extract',
+	).delete()
+
+	records_created = 0
+	income_rows = [
+		('insurance_bonus', _to_decimal(statement.get('insurance_bonus_byn')), 'Страховой бонус'),
+		(
+			'refinancing_yield',
+			_to_decimal(statement.get('refinancing_yield_byn')),
+			'Доходность (ставка рефинансирования)',
+		),
+	]
+	for income_kind, total_amount, description in income_rows:
+		if total_amount <= 0:
+			continue
+		for month_end, amount in spread_income_by_cumulative_contributions(total_amount, monthly_totals):
+			if amount <= 0:
+				continue
+			fingerprint = _fingerprint(
+				'stravita',
+				account_number,
+				'income',
+				income_kind,
+				month_end.isoformat(),
+			)
+			occurred_at = timezone.make_aware(datetime.combine(month_end, datetime.min.time()))
+			Transaction.objects.update_or_create(
+				import_fingerprint=fingerprint,
+				defaults={
+					'account': payroll_account,
+					'product': product,
+					'import_job': import_job,
+					'transaction_type': Transaction.TransactionType.INCOME,
+					'currency': byn,
+					'amount': amount,
+					'amount_usd': _amount_usd(amount, byn, rate_date=month_end),
+					'occurred_at': occurred_at,
+					'description': f'{description} — {month_end:%m.%Y}',
+					'metadata': {
+						'imported_from': 'stravita-extract',
+						'income_kind': income_kind,
+						'as_of_date': as_of_raw,
+						'accrual_month': month_end.strftime('%Y-%m'),
+						'spread_accrual': True,
+					},
+				},
+			)
+			records_created += 1
+	return records_created
+
+
 def ensure_stravita_bootstrap(*, management_expense_pct: Decimal | None = None) -> dict:
 	byn = Currency.objects.get(code='BYN')
 	stravita, _ = FinancialInstitution.objects.update_or_create(
@@ -402,35 +523,15 @@ def persist_stravita_extract(
 		},
 	)
 
-	records_created = 1
-	income_rows = [
-		('insurance_bonus', _to_decimal(statement.get('insurance_bonus_byn')), 'Страховой бонус'),
-		('refinancing_yield', _to_decimal(statement.get('refinancing_yield_byn')), 'Доходность (ставка рефинансирования)'),
-	]
-	for income_kind, amount, description in income_rows:
-		if amount <= 0:
-			continue
-		fingerprint = _fingerprint('stravita', statement['account_number'], 'income', income_kind, as_of_raw)
-		Transaction.objects.update_or_create(
-			import_fingerprint=fingerprint,
-			defaults={
-				'account': payroll_account,
-				'product': product,
-				'import_job': raw_import_file.job,
-				'transaction_type': Transaction.TransactionType.INCOME,
-				'currency': byn,
-				'amount': amount,
-				'amount_usd': _amount_usd(amount, byn, rate_date=as_of_date),
-				'occurred_at': as_of_dt,
-				'description': description,
-				'metadata': {
-					'imported_from': 'stravita-extract',
-					'income_kind': income_kind,
-					'as_of_date': as_of_raw,
-				},
-			},
-		)
-		records_created += 1
+	records_created = 1 + _sync_stravita_spread_income(
+		product=product,
+		account_number=statement['account_number'],
+		statement=statement,
+		payroll_account=payroll_account,
+		byn=byn,
+		as_of_date=as_of_date,
+		import_job=raw_import_file.job,
+	)
 
 	return records_created
 
@@ -501,6 +602,20 @@ def persist_stravita_contributions(raw_import_file, result: ParseResult) -> int:
 		)
 		if created:
 			records_created += 1
+
+	metadata = product.metadata if isinstance(product.metadata, dict) else {}
+	as_of_raw = metadata.get('as_of_date', '')
+	if as_of_raw and metadata.get('imported_from') == 'stravita-extract':
+		as_of_date = datetime.strptime(as_of_raw, '%Y-%m-%d').date()
+		records_created += _sync_stravita_spread_income(
+			product=product,
+			account_number=account_number,
+			statement=metadata,
+			payroll_account=payroll_account,
+			byn=byn,
+			as_of_date=as_of_date,
+			import_job=raw_import_file.job,
+		)
 
 	return records_created
 

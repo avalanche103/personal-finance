@@ -6,6 +6,7 @@ from apps.accounts.models import Account, Transaction
 from apps.common.models import Currency
 from apps.common.services.aigenis_bonds import apply_aigenis_indexed_bond_defaults
 from apps.common.services.aigenis_reconciliation import canonical_aigenis_security_name, reconcile_aigenis_products
+from apps.common.services.finstore_operations import is_finstore_redemption_operation
 from apps.products.models import Product
 from apps.imports.services.parsers.base import BaseImportParser, ParseResult
 from django.utils import timezone
@@ -701,12 +702,11 @@ class XLSImportParser(BaseImportParser):
         operation_type = row.get('operation_type', '')
         trade_operations = {'Покупка токенов', 'Покупка ICO токенов на Вторичном рынке'}
         income_operations = {'Получение дохода'}
-        redemption_operations = {'Возврат инвестиций'}
         deposit_operations = {'Пополнение кошелька'}
 
         if operation_type in trade_operations:
             return -abs(amount_decimal), Transaction.TransactionType.TRADE
-        if operation_type in redemption_operations:
+        if is_finstore_redemption_operation(operation_type):
             return abs(amount_decimal), Transaction.TransactionType.INCOME
         if operation_type in income_operations:
             return abs(amount_decimal), Transaction.TransactionType.INCOME
@@ -716,7 +716,7 @@ class XLSImportParser(BaseImportParser):
 
     def _build_finstore_position_quantity(self, row: dict, quantity_decimal: Decimal) -> Decimal:
         operation_type = row.get('operation_type', '')
-        if operation_type == 'Возврат инвестиций':
+        if is_finstore_redemption_operation(operation_type):
             return -abs(quantity_decimal)
         return quantity_decimal
 

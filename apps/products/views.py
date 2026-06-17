@@ -21,6 +21,7 @@ from apps.products.analytics import (
 from apps.common.services.indexed_bonds import (
     build_income_calendar_rows,
     build_product_income_calendar,
+    resolve_product_market_value_usd,
     save_income_calendar_config,
 )
 from apps.products.forms import ProductDepositTermsForm, ProductForm, ProductIncomeCalendarForm, ProductTokenTermsForm
@@ -245,7 +246,7 @@ def _build_product_detail_context(product: Product) -> dict:
     position_summary = build_product_position_summary(
         all_transactions,
         product.market_value,
-        market_value_usd=product.current_value_usd,
+        market_value_usd=resolve_product_market_value_usd(product),
         currency=product.currency,
         product_type=product.product_type,
     )

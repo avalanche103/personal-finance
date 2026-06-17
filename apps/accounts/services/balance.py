@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from apps.accounts.models import Account, Transaction
@@ -19,7 +19,11 @@ def calculate_account_balance(account: Account) -> Decimal:
 
 def calculate_account_balance_as_of(account: Account, as_of_date: date) -> Decimal:
 	total = Decimal('0')
-	for transaction in Transaction.objects.filter(account=account, occurred_at__date__lte=as_of_date).only(
+	end_of_day = timezone.make_aware(
+		datetime.combine(as_of_date + timedelta(days=1), time.min),
+		timezone.get_current_timezone(),
+	)
+	for transaction in Transaction.objects.filter(account=account, occurred_at__lt=end_of_day).only(
 		'amount',
 		'metadata',
 	):

@@ -14,7 +14,13 @@
                 <tr>
                     <td>
                         <div class="period-comparison-row-label">
-                            {% if row.is_deposit_group %}
+                            {% if row.group_initials %}
+                                <span
+                                    class="institution-logo institution-logo-fallback institution-logo-sm"
+                                    style="--institution-accent: {{ row.group_accent }}"
+                                    aria-hidden="true"
+                                >{{ row.group_initials }}</span>
+                            {% elif row.is_deposit_group %}
                                 <span
                                     class="institution-logo institution-logo-fallback institution-logo-sm"
                                     style="--institution-accent: #0D9488"

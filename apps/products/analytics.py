@@ -7,6 +7,7 @@ from decimal import Decimal
 from math import isfinite
 
 from apps.accounts.models import Transaction
+from apps.common.services.indexed_bonds import resolve_product_market_value_usd
 from apps.products.models import Product
 
 TOKEN_ISSUER_PATTERN = re.compile(
@@ -450,7 +451,7 @@ def build_product_groups(
     for product in products:
         group_key = product_group_key(product)
         market_value = product.market_value or Decimal('0')
-        market_value_usd = product.current_value_usd or Decimal('0')
+        market_value_usd = resolve_product_market_value_usd(product)
         product_transactions = transaction_map.get(product.id, [])
         position_summary = build_product_position_summary(
             product_transactions,
