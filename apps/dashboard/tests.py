@@ -12,6 +12,7 @@ from apps.institutions.models import FinancialInstitution
 from apps.dashboard.views import (
 	_build_deposit_withdrawal_totals,
 	_build_portfolio_period_comparisons,
+	_account_balance_as_of,
 	_account_value_as_of,
 	_dashboard_metrics,
 	_historical_portfolio_context,
@@ -643,6 +644,109 @@ class DashboardSmokeTests(TestCase):
 
 		self.assertEqual(today_value, Decimal('12.50'))
 		self.assertEqual(yesterday_value, Decimal('10.00'))
+
+	def test_account_balance_as_of_zero_after_stale_normalization(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Stale Binance Bank',
+			slug='stale-binance-bank',
+			institution_type=FinancialInstitution.InstitutionType.BROKER,
+			base_currency=usd,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Stale RWUSD',
+			account_type=Account.AccountType.BROKERAGE,
+			currency=usd,
+			current_balance=Decimal('0'),
+			current_balance_usd=Decimal('0'),
+			metadata={'source': 'binance', 'stale_after_normalization': True},
+		)
+		Account.objects.filter(pk=account.pk).update(
+			updated_at=timezone.make_aware(datetime(2026, 6, 18, 8, 0)),
+		)
+		account.refresh_from_db()
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('535.47'),
+			balance_usd=Decimal('535.47'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 17, 16, 0)),
+			metadata={'source': 'binance'},
+		)
+
+		cache = PortfolioHistoryCache.build()
+		self.assertEqual(
+			_account_balance_as_of(account, date(2026, 6, 17), portfolio_cache=cache),
+			Decimal('535.47'),
+		)
+		self.assertEqual(
+			_account_balance_as_of(account, date(2026, 6, 18), portfolio_cache=cache),
+			Decimal('0'),
+		)
+		self.assertEqual(
+			_account_value_as_of(account, date(2026, 6, 21), {}, portfolio_cache=cache),
+			Decimal('0'),
+		)
+
+	def test_account_balance_as_of_zero_balance_from_overrides_stale_updated_at(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Backdated Stale Bank',
+			slug='backdated-stale-bank',
+			institution_type=FinancialInstitution.InstitutionType.BROKER,
+			base_currency=usd,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Backdated RWUSD',
+			account_type=Account.AccountType.BROKERAGE,
+			currency=usd,
+			current_balance=Decimal('0'),
+			current_balance_usd=Decimal('0'),
+			metadata={
+				'source': 'binance',
+				'stale_after_normalization': True,
+				'zero_balance_from': '2026-06-17',
+			},
+		)
+		Account.objects.filter(pk=account.pk).update(
+			updated_at=timezone.make_aware(datetime(2026, 6, 21, 8, 0)),
+		)
+		account.refresh_from_db()
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('535.47'),
+			balance_usd=Decimal('535.47'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 16, 12, 0)),
+			metadata={'source': 'binance'},
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('535.47'),
+			balance_usd=Decimal('535.47'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 17, 16, 0)),
+			metadata={'source': 'binance'},
+		)
+
+		cache = PortfolioHistoryCache.build()
+		self.assertEqual(
+			_account_balance_as_of(account, date(2026, 6, 16), portfolio_cache=cache),
+			Decimal('535.47'),
+		)
+		self.assertEqual(
+			_account_balance_as_of(account, date(2026, 6, 17), portfolio_cache=cache),
+			Decimal('0'),
+		)
+		self.assertEqual(
+			_account_balance_as_of(account, date(2026, 6, 20), portfolio_cache=cache),
+			Decimal('0'),
+		)
 
 	def test_account_value_as_of_uses_local_day_boundary_for_transactions(self):
 		usd = Currency.objects.get(code='USD')

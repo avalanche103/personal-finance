@@ -365,8 +365,25 @@ def sync_spot_balances(client: BinanceClient | None = None, *, create_snapshots:
 			product.is_active = False
 			metadata = product.metadata if isinstance(product.metadata, dict) else {}
 			metadata['stale_after_normalization'] = True
+			metadata.setdefault('zero_balance_from', timezone.localdate().isoformat())
 			product.metadata = metadata
 			product.save(update_fields=['units', 'current_value_usd', 'is_active', 'metadata', 'updated_at'])
+			if create_snapshots:
+				BalanceSnapshot.objects.create(
+					institution=institution,
+					product=product,
+					currency=product.currency,
+					balance=Decimal('0'),
+					balance_usd=Decimal('0'),
+					captured_at=timezone.now(),
+					metadata={
+						'source': 'binance',
+						'wallet': metadata.get('product_area', 'spot'),
+						'asset': metadata.get('asset', product.symbol),
+						'stale_after_normalization': True,
+						'import_job_id': job.pk,
+					},
+				)
 
 		stale_accounts = Account.objects.filter(
 			institution=institution,
@@ -379,8 +396,25 @@ def sync_spot_balances(client: BinanceClient | None = None, *, create_snapshots:
 			account.is_active = False
 			metadata = account.metadata if isinstance(account.metadata, dict) else {}
 			metadata['stale_after_normalization'] = True
+			metadata.setdefault('zero_balance_from', timezone.localdate().isoformat())
 			account.metadata = metadata
 			account.save(update_fields=['current_balance', 'current_balance_usd', 'is_active', 'metadata', 'updated_at'])
+			if create_snapshots:
+				BalanceSnapshot.objects.create(
+					institution=institution,
+					account=account,
+					currency=account.currency,
+					balance=Decimal('0'),
+					balance_usd=Decimal('0'),
+					captured_at=timezone.now(),
+					metadata={
+						'source': 'binance',
+						'wallet': metadata.get('wallet', 'spot'),
+						'asset': metadata.get('asset', ''),
+						'stale_after_normalization': True,
+						'import_job_id': job.pk,
+					},
+				)
 
 		job.status = ImportJob.Status.SAVED
 		job.rows_detected = len(balances)

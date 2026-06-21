@@ -112,6 +112,26 @@ def _snapshot_local_date(snapshot: BalanceSnapshot) -> date:
     return timezone.localtime(snapshot.captured_at).date()
 
 
+def _entity_metadata(entity) -> dict:
+    metadata = entity.metadata
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _stale_zero_local_date(entity) -> date | None:
+    metadata = _entity_metadata(entity)
+    if not metadata.get('stale_after_normalization'):
+        return None
+    balance = getattr(entity, 'current_balance', None)
+    if balance is None:
+        balance = getattr(entity, 'units', None)
+    if balance not in (None, Decimal('0')):
+        return None
+    explicit = metadata.get('zero_balance_from')
+    if explicit:
+        return date.fromisoformat(explicit) if isinstance(explicit, str) else explicit
+    return timezone.localtime(entity.updated_at).date()
+
+
 def _latest_balance_snapshot_as_of(
     snapshots: list[BalanceSnapshot],
     as_of_date: date,
@@ -135,6 +155,15 @@ def _account_balance_as_of(
 ) -> Decimal:
     if not is_portfolio_holding_account(account):
         return Decimal('0')
+
+    today = timezone.localdate()
+    if as_of_date >= today:
+        return account.current_balance or Decimal('0')
+
+    stale_zero_date = _stale_zero_local_date(account)
+    if stale_zero_date is not None and as_of_date >= stale_zero_date:
+        return Decimal('0')
+
     if portfolio_cache is not None:
         snapshot = _latest_balance_snapshot_as_of(
             portfolio_cache.account_snapshots.get(account.id, []),
@@ -643,9 +672,6 @@ def _build_portfolio_period_comparisons(
     return comparisons
 
 
-def _is_current_portfolio_date(as_of_date) -> bool:
-    return as_of_date == timezone.localdate()
-
 
 def _account_value_as_of(
     account: Account,
@@ -654,8 +680,6 @@ def _account_value_as_of(
     *,
     portfolio_cache: PortfolioHistoryCache | None = None,
 ) -> Decimal:
-    if _is_current_portfolio_date(as_of_date):
-        return account.current_balance_usd or Decimal('0')
     if not is_portfolio_holding_account(account):
         return Decimal('0')
     balance = _account_balance_as_of(account, as_of_date, portfolio_cache=portfolio_cache)
@@ -691,6 +715,43 @@ def _product_units_from_transactions_as_of(
     )
 
 
+def _product_native_units_as_of(
+    product: Product,
+    as_of_date: date,
+    *,
+    transaction_map: dict[int, list[Transaction]] | None = None,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+) -> Decimal:
+    today = timezone.localdate()
+    if as_of_date >= today:
+        return product.units or Decimal('0')
+
+    stale_zero_date = _stale_zero_local_date(product)
+    if stale_zero_date is not None and as_of_date >= stale_zero_date:
+        return Decimal('0')
+
+    effective_transaction_map = transaction_map or (portfolio_cache.transaction_map if portfolio_cache else None)
+    if portfolio_cache is not None:
+        snapshot = _latest_balance_snapshot_as_of(
+            portfolio_cache.product_snapshots.get(product.id, []),
+            as_of_date,
+        )
+    else:
+        snapshot = (
+            product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
+            .order_by('-captured_at', '-id')
+            .first()
+        )
+    if snapshot:
+        return snapshot.balance
+    units_from_transactions = _product_units_from_transactions_as_of(product, as_of_date, effective_transaction_map)
+    if units_from_transactions is not None:
+        return units_from_transactions
+    if timezone.localtime(product.created_at).date() > as_of_date:
+        return Decimal('0')
+    return product.units or Decimal('0')
+
+
 def _product_value_as_of(
     product: Product,
     as_of_date,
@@ -699,8 +760,6 @@ def _product_value_as_of(
     transaction_map: dict[int, list[Transaction]] | None = None,
     portfolio_cache: PortfolioHistoryCache | None = None,
 ) -> Decimal:
-    if _is_current_portfolio_date(as_of_date):
-        return product.current_value_usd or Decimal('0')
     if portfolio_cache is not None:
         rate = _usd_rate_from_cache(
             product.currency,
@@ -711,7 +770,13 @@ def _product_value_as_of(
     else:
         rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
     if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
-        if portfolio_cache is not None:
+        today = timezone.localdate()
+        if as_of_date >= today:
+            return product.current_value_usd or Decimal('0')
+        stale_zero_date = _stale_zero_local_date(product)
+        if stale_zero_date is not None and as_of_date >= stale_zero_date:
+            native_value = Decimal('0')
+        elif portfolio_cache is not None:
             native_value = _balance_snapshot_as_of(
                 portfolio_cache.product_snapshots.get(product.id, []),
                 as_of_date,
@@ -738,28 +803,12 @@ def _product_value_as_of(
                 )
         return native_value * rate
 
-    effective_transaction_map = transaction_map or (portfolio_cache.transaction_map if portfolio_cache else None)
-    if portfolio_cache is not None:
-        snapshot = _latest_balance_snapshot_as_of(
-            portfolio_cache.product_snapshots.get(product.id, []),
-            as_of_date,
-        )
-    else:
-        snapshot = (
-            product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
-            .order_by('-captured_at', '-id')
-            .first()
-        )
-    if snapshot:
-        units = snapshot.balance
-    else:
-        units_from_transactions = _product_units_from_transactions_as_of(product, as_of_date, effective_transaction_map)
-        if units_from_transactions is not None:
-            units = units_from_transactions
-        elif timezone.localtime(product.created_at).date() > as_of_date:
-            units = Decimal('0')
-        else:
-            units = product.units or Decimal('0')
+    units = _product_native_units_as_of(
+        product,
+        as_of_date,
+        transaction_map=transaction_map,
+        portfolio_cache=portfolio_cache,
+    )
     return _product_market_value_native(product, units=units) * rate
 
 
