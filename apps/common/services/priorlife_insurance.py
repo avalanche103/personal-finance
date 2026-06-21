@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import calendar
 import hashlib
 import re
 from collections import defaultdict
@@ -21,6 +20,7 @@ from apps.products.models import Product
 PRIORLIFE_SLUG = 'priorlife'
 PREMIUM_INSTITUTION_SLUG = 'income-sources'
 PREMIUM_ACCOUNT_NAME = 'Страховые взносы'
+YIELD_ACCRUAL_DAY = 20
 
 DECIMAL_TOKEN_PATTERN = re.compile(r'[\d, ]+(?:\.\d+)?')
 HEADER_PATTERN = re.compile(
@@ -270,8 +270,8 @@ def compute_priorlife_balances(
 	}
 
 
-def _month_end(year: int, month: int) -> date:
-	return date(year, month, calendar.monthrange(year, month)[1])
+def _yield_accrual_date(year: int, month: int) -> date:
+	return date(year, month, YIELD_ACCRUAL_DAY)
 
 
 def spread_yield_by_contribution_months(
@@ -280,7 +280,7 @@ def spread_yield_by_contribution_months(
 	*,
 	load_pct: Decimal,
 ) -> list[tuple[date, Decimal]]:
-	"""Allocate accrued yield across month-ends, weighted by cumulative net balance."""
+	"""Allocate accrued yield across monthly accrual dates, weighted by cumulative net balance."""
 	if total_yield <= 0 or not contributions:
 		return []
 
@@ -313,7 +313,7 @@ def spread_yield_by_contribution_months(
 		else:
 			amount = (total_yield * weight / total_weight).quantize(Decimal('0.01'))
 			allocated += amount
-		rows.append((_month_end(year, month), amount))
+		rows.append((_yield_accrual_date(year, month), amount))
 	return rows
 
 
@@ -415,6 +415,232 @@ def _contract_details_from_source(raw_import_file) -> dict | None:
 		if str(config.get(key, '') or '').strip()
 	}
 	return details or None
+
+
+def list_priorlife_products() -> list[Product]:
+	bootstrap = ensure_priorlife_bootstrap()
+	return list(
+		Product.objects.filter(
+			institution=bootstrap['priorlife'],
+			product_type=Product.ProductType.LIFE_INSURANCE,
+			is_active=True,
+		).order_by('external_id')
+	)
+
+
+def _contributions_from_product(product: Product) -> list[dict]:
+	rows: list[dict] = []
+	queryset = Transaction.objects.filter(
+		product=product,
+		transaction_type=Transaction.TransactionType.DEPOSIT,
+	).order_by('occurred_at', 'pk')
+	for tx in queryset:
+		md = tx.metadata if isinstance(tx.metadata, dict) else {}
+		if md.get('imported_from') not in ('priorlife-contributions', 'priorlife-manual'):
+			continue
+		payment_date = md.get('payment_date') or tx.occurred_at.date().isoformat()
+		rows.append(
+			{
+				'account_number': product.external_id,
+				'payment_date': payment_date,
+				'due_date': md.get('due_date', ''),
+				'amount': str(tx.amount),
+				'currency_code': 'USD',
+				'status': 'paid',
+			}
+		)
+	return rows
+
+
+def _sync_priorlife_income_transactions(
+	*,
+	product: Product,
+	account_number: str,
+	contributions: list[dict],
+	metadata: dict,
+	premium_account: Account,
+	usd: Currency,
+	import_job=None,
+) -> int:
+	records_created = 0
+	load_pct = _to_decimal(metadata.get('contract_load_pct'))
+	income_specs = [
+		(
+			'accrued_yield_in_account',
+			_to_decimal(metadata.get('accrued_yield_in_account')),
+			'Начисленная доходность (в счёте)',
+		),
+		(
+			'additional_accrued_yield_in_account',
+			_to_decimal(metadata.get('additional_accrued_yield_in_account')),
+			'Начисленная дополнительная доходность (в счёте)',
+		),
+	]
+	Transaction.objects.filter(
+		product=product,
+		transaction_type=Transaction.TransactionType.INCOME,
+		metadata__imported_from='priorlife-contributions',
+	).delete()
+	for income_kind, total_amount, description_prefix in income_specs:
+		if total_amount <= 0:
+			continue
+		for accrual_date, amount in spread_yield_by_contribution_months(
+			total_amount,
+			contributions,
+			load_pct=load_pct,
+		):
+			if amount <= 0:
+				continue
+			occurred_at = timezone.make_aware(datetime.combine(accrual_date, time(12, 0)))
+			fingerprint = _fingerprint(
+				'priorlife',
+				account_number,
+				'income',
+				income_kind,
+				accrual_date.isoformat(),
+			)
+			Transaction.objects.update_or_create(
+				import_fingerprint=fingerprint,
+				defaults={
+					'account': premium_account,
+					'product': product,
+					'import_job': import_job,
+					'transaction_type': Transaction.TransactionType.INCOME,
+					'currency': usd,
+					'amount': amount,
+					'amount_usd': _amount_usd(amount, usd, rate_date=accrual_date),
+					'occurred_at': occurred_at,
+					'description': f'{description_prefix} — {accrual_date:%m.%Y}',
+					'metadata': {
+						'imported_from': 'priorlife-contributions',
+						'income_kind': income_kind,
+						'accrual_month': accrual_date.strftime('%Y-%m'),
+						'spread_accrual': True,
+					},
+				},
+			)
+			records_created += 1
+	return records_created
+
+
+@transaction.atomic
+def apply_priorlife_manual_update(
+	*,
+	account_number: str,
+	payment_date: date,
+	premium_amount: Decimal,
+	accumulated_amount: Decimal,
+	import_job=None,
+) -> dict:
+	if premium_amount <= 0:
+		raise ValueError('Premium amount must be positive.')
+	if accumulated_amount <= 0:
+		raise ValueError('Accumulated amount must be positive.')
+
+	bootstrap = ensure_priorlife_bootstrap()
+	priorlife = bootstrap['priorlife']
+	usd = bootstrap['usd']
+	premium_account = bootstrap['premium_account']
+
+	product = Product.objects.filter(institution=priorlife, external_id=account_number).first()
+	if product is None:
+		raise ValueError(f'Priorlife product not found: {account_number}')
+
+	metadata = dict(product.metadata or {})
+	load_pct = _to_decimal(metadata.get('contract_load_pct'))
+	payment_iso = payment_date.isoformat()
+	due_date = payment_iso
+	fingerprint = _fingerprint(
+		'priorlife',
+		account_number,
+		payment_iso,
+		due_date,
+		str(premium_amount),
+	)
+	net_amount, load_amount = _split_premium_load(premium_amount, load_pct)
+	occurred_at = timezone.make_aware(datetime.combine(payment_date, datetime.min.time()))
+	_, deposit_created = Transaction.objects.update_or_create(
+		import_fingerprint=fingerprint,
+		defaults={
+			'account': premium_account,
+			'product': product,
+			'import_job': import_job,
+			'transaction_type': Transaction.TransactionType.DEPOSIT,
+			'currency': usd,
+			'amount': premium_amount,
+			'amount_usd': _amount_usd(premium_amount, usd, rate_date=payment_date),
+			'occurred_at': occurred_at,
+			'description': f'Приорлайф взнос — {payment_date:%d.%m.%Y}',
+			'metadata': {
+				'imported_from': 'priorlife-manual',
+				'contribution_source': 'manual',
+				'due_date': due_date,
+				'payment_date': payment_iso,
+				'gross_amount': str(premium_amount),
+				'net_amount': str(net_amount),
+				'load_amount': str(load_amount),
+				'load_pct': str(load_pct),
+			},
+		},
+	)
+
+	contributions = _contributions_from_product(product)
+	gross_paid = sum(_to_decimal(row.get('amount')) for row in contributions)
+	balance_fields = compute_priorlife_balances(
+		gross_paid=gross_paid,
+		load_pct=load_pct,
+		accumulated_amount=accumulated_amount,
+		accrued_yield_reported=_to_decimal(metadata.get('accrued_yield_reported')) or None,
+		additional_accrued_yield_reported=_to_decimal(metadata.get('additional_accrued_yield_reported')) or None,
+	)
+	metadata.update(balance_fields)
+	metadata['accumulated_amount'] = str(accumulated_amount)
+	metadata['paid_contributions_total'] = balance_fields['paid_contributions_gross']
+	metadata['as_of_date'] = payment_iso
+	metadata['imported_from'] = 'priorlife-contributions'
+
+	as_of_dt = timezone.make_aware(datetime.combine(payment_date, datetime.min.time()))
+	product.current_price = accumulated_amount
+	product.metadata = metadata
+	product.current_value_usd = _amount_usd(accumulated_amount, usd, rate_date=payment_date)
+	product.save(update_fields=['current_price', 'current_value_usd', 'metadata', 'updated_at'])
+
+	BalanceSnapshot.objects.update_or_create(
+		institution=priorlife,
+		product=product,
+		captured_at=as_of_dt,
+		defaults={
+			'currency': usd,
+			'balance': accumulated_amount,
+			'balance_usd': product.current_value_usd,
+			'metadata': {
+				'imported_from': 'priorlife-manual',
+				'paid_contributions_gross': balance_fields.get('paid_contributions_gross', ''),
+				'net_contributions_total': balance_fields.get('net_contributions_total', ''),
+				'contract_load_deducted_total': balance_fields.get('contract_load_deducted_total', ''),
+				'accrued_yield_in_account': balance_fields.get('accrued_yield_in_account', ''),
+				'additional_accrued_yield_in_account': balance_fields.get('additional_accrued_yield_in_account', ''),
+			},
+		},
+	)
+
+	income_records = _sync_priorlife_income_transactions(
+		product=product,
+		account_number=account_number,
+		contributions=contributions,
+		metadata=metadata,
+		premium_account=premium_account,
+		usd=usd,
+		import_job=import_job,
+	)
+
+	return {
+		'account_number': account_number,
+		'deposit_created': deposit_created,
+		'income_records': income_records,
+		'accumulated_amount': str(accumulated_amount),
+		'gross_paid': str(gross_paid),
+	}
 
 
 @transaction.atomic
@@ -560,62 +786,15 @@ def persist_priorlife_contributions(
 		if created:
 			records_created += 1
 
-	income_specs = [
-		(
-			'accrued_yield_in_account',
-			_to_decimal(metadata.get('accrued_yield_in_account')),
-			'Начисленная доходность (в счёте)',
-		),
-		(
-			'additional_accrued_yield_in_account',
-			_to_decimal(metadata.get('additional_accrued_yield_in_account')),
-			'Начисленная дополнительная доходность (в счёте)',
-		),
-	]
-	Transaction.objects.filter(
+	records_created += _sync_priorlife_income_transactions(
 		product=product,
-		transaction_type=Transaction.TransactionType.INCOME,
-		metadata__imported_from='priorlife-contributions',
-	).delete()
-	for income_kind, total_amount, description_prefix in income_specs:
-		if total_amount <= 0:
-			continue
-		for month_end, amount in spread_yield_by_contribution_months(
-			total_amount,
-			statement.get('contributions', []),
-			load_pct=load_pct,
-		):
-			if amount <= 0:
-				continue
-			occurred_at = timezone.make_aware(datetime.combine(month_end, time(12, 0)))
-			fingerprint = _fingerprint(
-				'priorlife',
-				account_number,
-				'income',
-				income_kind,
-				month_end.isoformat(),
-			)
-			Transaction.objects.update_or_create(
-				import_fingerprint=fingerprint,
-				defaults={
-					'account': premium_account,
-					'product': product,
-					'import_job': raw_import_file.job,
-					'transaction_type': Transaction.TransactionType.INCOME,
-					'currency': usd,
-					'amount': amount,
-					'amount_usd': _amount_usd(amount, usd, rate_date=month_end),
-					'occurred_at': occurred_at,
-					'description': f'{description_prefix} — {month_end:%m.%Y}',
-					'metadata': {
-						'imported_from': 'priorlife-contributions',
-						'income_kind': income_kind,
-						'accrual_month': month_end.strftime('%Y-%m'),
-						'spread_accrual': True,
-					},
-				},
-			)
-			records_created += 1
+		account_number=account_number,
+		contributions=statement.get('contributions', []),
+		metadata=metadata,
+		premium_account=premium_account,
+		usd=usd,
+		import_job=raw_import_file.job,
+	)
 
 	return records_created
 

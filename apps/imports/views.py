@@ -2,13 +2,14 @@ from django.contrib import messages
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 
-from apps.imports.forms import ImportUploadForm
+from apps.imports.forms import ImportUploadForm, PriorlifeManualUpdateForm
 from apps.imports.models import ImportJob
 from apps.imports.services.details import get_editable_records, infer_record_fields, update_editable_record
-from apps.imports.services.manual_sync import sync_binance_manual, sync_nbrb_rates_manual
+from apps.imports.services.manual_sync import sync_binance_manual, sync_nbrb_rates_manual, sync_priorlife_manual
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
 from apps.imports.services.progress import job_progress
 from apps.imports.services.recent_jobs import recent_import_jobs, recent_import_jobs_queryset
+from apps.common.services.priorlife_insurance import list_priorlife_products
 
 
 def import_upload(request):
@@ -31,8 +32,11 @@ def import_upload(request):
         .first()
     )
     highlight_job_ids = request.session.pop('recent_job_ids', [])
+    priorlife_products = list_priorlife_products()
     context = {
         'form': form,
+        'priorlife_form': PriorlifeManualUpdateForm(priorlife_products),
+        'priorlife_products': priorlife_products,
         'recent_jobs': recent_import_jobs(),
         'highlight_job_ids': highlight_job_ids,
         'active_job': active_job,
@@ -100,6 +104,30 @@ def import_sync_binance(request):
 	else:
 		level = messages.warning if result.details.get('skipped') else messages.error
 		level(request, result.message)
+	if result.job_ids:
+		request.session['recent_job_ids'] = result.job_ids
+	return redirect('imports:upload')
+
+
+def import_priorlife_update(request):
+	if request.method != 'POST':
+		return HttpResponseBadRequest('POST required')
+
+	priorlife_products = list_priorlife_products()
+	form = PriorlifeManualUpdateForm(priorlife_products, request.POST)
+	if not form.is_valid():
+		for error in form.non_field_errors():
+			messages.error(request, error)
+		for field_errors in form.errors.values():
+			for error in field_errors:
+				messages.error(request, error)
+		return redirect('imports:upload')
+
+	result = sync_priorlife_manual(form.cleaned_contract_updates())
+	if result.success:
+		messages.success(request, result.message)
+	else:
+		messages.error(request, result.message)
 	if result.job_ids:
 		request.session['recent_job_ids'] = result.job_ids
 	return redirect('imports:upload')

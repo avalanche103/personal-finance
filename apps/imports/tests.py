@@ -16,6 +16,7 @@ from apps.common.services.alfabank_deposits import parse_alfabank_deposit_statem
 from apps.common.services.belarusbank_deposits import parse_belarusbank_deposit_statement
 from apps.common.services.bnb_deposits import parse_bnb_deposit_statement
 from apps.common.services.priorlife_insurance import (
+	apply_priorlife_manual_update,
 	compute_priorlife_balances,
 	parse_priorlife_contributions,
 	spread_yield_by_contribution_months,
@@ -537,8 +538,8 @@ class PriorlifeInsuranceImportTests(TestCase):
 			load_pct=Decimal('8'),
 		)
 		self.assertEqual(len(rows), 2)
-		self.assertEqual(rows[0][0], date(2016, 7, 31))
-		self.assertEqual(rows[1][0], date(2016, 8, 31))
+		self.assertEqual(rows[0][0], date(2016, 7, 20))
+		self.assertEqual(rows[1][0], date(2016, 8, 20))
 		self.assertEqual(rows[0][1], Decimal('7.50'))
 		self.assertEqual(rows[1][1], Decimal('22.50'))
 		self.assertEqual(sum(amount for _, amount in rows), Decimal('30'))
@@ -585,7 +586,7 @@ class PriorlifeInsuranceImportTests(TestCase):
 		self.assertEqual(sum(tx.amount for tx in income), Decimal('947.14'))
 		self.assertFalse(income.filter(occurred_at__date=date(2026, 6, 5)).exists())
 		last_income = income.order_by('-occurred_at').first()
-		self.assertEqual(last_income.occurred_at.date(), date(2026, 5, 31))
+		self.assertEqual(last_income.occurred_at.date(), date(2026, 5, 20))
 		self.assertTrue(last_income.metadata.get('spread_accrual'))
 
 		premium_account = Account.objects.get(institution__slug='income-sources', name='Страховые взносы')
@@ -595,7 +596,49 @@ class PriorlifeInsuranceImportTests(TestCase):
 		self.assertEqual(str(first_deposit.metadata['load_amount']), '2.00')
 
 		snapshot = BalanceSnapshot.objects.get(product=product)
-		self.assertEqual(str(snapshot.balance), '3684.14000000')
+		self.assertEqual(snapshot.balance, Decimal('3684.14'))
+
+	def test_apply_priorlife_manual_update(self):
+		institution = FinancialInstitution.objects.get(slug='priorlife')
+		source = ImportSource.objects.get(code='priorlife-contributions')
+		source.config = {
+			'parser': 'priorlife-contributions',
+			'contract_load_pct': '8',
+			'accumulated_amount': '3684.14',
+			'accrued_yield': '1867.14',
+		}
+		source.save(update_fields=['config', 'updated_at'])
+		upload = SimpleUploadedFile(
+			'Priorlife_1.pdf',
+			self._pdf_path('Priorlife_1.pdf').read_bytes(),
+			content_type='application/pdf',
+		)
+		process_uploaded_import(source, upload)
+		product = Product.objects.get(institution=institution, external_id='210004070')
+
+		result = apply_priorlife_manual_update(
+			account_number='210004070',
+			payment_date=date(2026, 6, 10),
+			premium_amount=Decimal('25'),
+			accumulated_amount=Decimal('3725'),
+		)
+		self.assertTrue(result['deposit_created'])
+
+		product.refresh_from_db()
+		self.assertEqual(str(product.current_price), '3725.00000000')
+		self.assertEqual(product.metadata['accumulated_amount'], '3725')
+		self.assertEqual(product.metadata['paid_contributions_total'], '3000.00')
+		self.assertEqual(product.metadata['accrued_yield_in_account'], '965.00')
+
+		deposits = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.DEPOSIT)
+		self.assertEqual(deposits.count(), 120)
+		june_deposit = deposits.filter(metadata__payment_date='2026-06-10').get()
+		self.assertEqual(june_deposit.amount, Decimal('25'))
+
+		income = Transaction.objects.filter(product=product, transaction_type=Transaction.TransactionType.INCOME)
+		self.assertEqual(income.count(), 99)
+		self.assertEqual(sum(tx.amount for tx in income), Decimal('965.00'))
+		self.assertTrue(income.filter(occurred_at__date=date(2026, 6, 20)).exists())
 
 
 class BnbDepositImportTests(TestCase):
@@ -917,6 +960,50 @@ class ImportManualSyncTests(TestCase):
 		follow_up = self.client.get(reverse('imports:upload'))
 		self.assertContains(follow_up, 'BINANCE_API_KEY')
 		self.assertContains(follow_up, 'is-recent-sync')
+
+	@patch('apps.imports.views.sync_priorlife_manual')
+	def test_manual_priorlife_update_redirects_with_success_message(self, sync_priorlife):
+		from apps.common.services.priorlife_insurance import ensure_priorlife_bootstrap
+		from apps.imports.services.manual_sync import ManualSyncResult
+
+		bootstrap = ensure_priorlife_bootstrap()
+		for account_number in ('210004069', '210004070'):
+			Product.objects.get_or_create(
+				institution=bootstrap['priorlife'],
+				external_id=account_number,
+				defaults={
+					'name': f'Приорлайф №{account_number}',
+					'product_type': Product.ProductType.LIFE_INSURANCE,
+					'currency': bootstrap['usd'],
+					'metadata': {'premium_amount': '25'},
+				},
+			)
+
+		sync_priorlife.return_value = ManualSyncResult(
+			True,
+			'Приорлайф обновлён: 210004069, 210004070. Job #42.',
+			job_ids=[42],
+		)
+
+		response = self.client.post(
+			reverse('imports:priorlife_update'),
+			data={
+				'210004069_payment_date': '2026-06-10',
+				'210004069_accumulated_amount': '3725',
+				'210004069_premium_amount': '25',
+				'210004070_payment_date': '2026-06-10',
+				'210004070_accumulated_amount': '3725',
+				'210004070_premium_amount': '25',
+			},
+		)
+
+		self.assertEqual(response.status_code, 302)
+		self.assertEqual(response['Location'], reverse('imports:upload'))
+		sync_priorlife.assert_called_once()
+
+		follow_up = self.client.get(reverse('imports:upload'))
+		self.assertContains(follow_up, 'Приорлайф обновлён')
+		self.assertContains(follow_up, 'Ежемесячное обновление')
 
 	@patch('apps.imports.services.manual_sync.recalculate_usd_valuations')
 	@patch('apps.imports.services.manual_sync.sync_daily_account_snapshots')

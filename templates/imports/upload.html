@@ -66,6 +66,48 @@
                 </form>
             </div>
         </div>
+
+        {% if priorlife_products %}
+        <div class="stack-md">
+            <div>
+                <p class="eyebrow">Приорлайф</p>
+                <h3>Ежемесячное обновление</h3>
+            </div>
+            <p class="muted">Дата внесения ежемесячного взноса и текущая сумма продукта из личного кабинета.</p>
+            <form method="post" action="{% url 'imports:priorlife_update' %}" class="stack-md">
+                {% csrf_token %}
+                {% for group in priorlife_form.field_groups %}
+                    <fieldset class="stack-sm">
+                        <legend>{{ group.product.name }}</legend>
+                        <div>
+                            {{ group.payment_date.label_tag }}
+                            {{ group.payment_date }}
+                            {% if group.payment_date.errors %}
+                                <div class="message error">{{ group.payment_date.errors }}</div>
+                            {% endif %}
+                        </div>
+                        <div>
+                            {{ group.accumulated_amount.label_tag }}
+                            {{ group.accumulated_amount }}
+                            {% if group.accumulated_amount.errors %}
+                                <div class="message error">{{ group.accumulated_amount.errors }}</div>
+                            {% endif %}
+                        </div>
+                        <div>
+                            {{ group.premium_amount.label_tag }}
+                            {{ group.premium_amount }}
+                            {% if group.premium_amount.errors %}
+                                <div class="message error">{{ group.premium_amount.errors }}</div>
+                            {% endif %}
+                        </div>
+                    </fieldset>
+                {% endfor %}
+                <div class="form-actions">
+                    <button type="submit" class="button button-secondary">Обновить Приорлайф</button>
+                </div>
+            </form>
+        </div>
+        {% endif %}
     </article>
 
     <article class="panel stack-md">

@@ -149,3 +149,48 @@ def sync_binance_manual() -> ManualSyncResult:
 			'daily_snapshots': daily.details,
 		},
 	)
+
+
+def sync_priorlife_manual(updates: list[dict]) -> ManualSyncResult:
+	from decimal import Decimal
+
+	from apps.common.services.priorlife_insurance import apply_priorlife_manual_update
+
+	job = record_manual_sync_job(
+		source_code='priorlife-contributions',
+		parser_name='priorlife-manual-update',
+		status=ImportJob.Status.PARSING,
+		details={'contracts': len(updates)},
+	)
+	results: list[dict] = []
+	try:
+		for update in updates:
+			result = apply_priorlife_manual_update(
+				account_number=update['account_number'],
+				payment_date=update['payment_date'],
+				premium_amount=Decimal(str(update['premium_amount'])),
+				accumulated_amount=Decimal(str(update['accumulated_amount'])),
+				import_job=job,
+			)
+			results.append(result)
+	except Exception as exc:
+		logger.exception('Manual Priorlife update failed')
+		job.status = ImportJob.Status.FAILED
+		job.error_message = str(exc)
+		job.finished_at = timezone.now()
+		job.details = {**(job.details or {}), 'results': results}
+		job.save(update_fields=['status', 'error_message', 'finished_at', 'details', 'updated_at'])
+		return ManualSyncResult(False, f'Приорлайф: {exc}', job_ids=[job.pk], details={'results': results})
+
+	records_created = sum(1 + item.get('income_records', 0) for item in results)
+	job.status = ImportJob.Status.SAVED
+	job.records_created = records_created
+	job.rows_detected = len(results)
+	job.finished_at = timezone.now()
+	job.details = {**(job.details or {}), 'results': results}
+	job.save(update_fields=['status', 'records_created', 'rows_detected', 'finished_at', 'details', 'updated_at'])
+	mark_import_jobs_recent([job.pk], note='Manual Priorlife update')
+
+	accounts = ', '.join(item['account_number'] for item in results)
+	message = f'Приорлайф обновлён: {accounts}. Job #{job.pk}.'
+	return ManualSyncResult(True, message, job_ids=[job.pk], details={'results': results})
