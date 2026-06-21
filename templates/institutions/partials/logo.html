@@ -4,7 +4,7 @@
         class="institution-logo institution-logo-{{ size }}"
         src="{% static logo_path %}"
         alt="{{ institution_name }}"
-        {% if size == 'sm' %}width="28" height="28"{% else %}width="36" height="36"{% endif %}
+        {% if size == 'sm' %}width="28" height="28"{% elif size == 'lg' %}width="150" height="150"{% else %}width="36" height="36"{% endif %}
         loading="lazy"
         decoding="async"
     >

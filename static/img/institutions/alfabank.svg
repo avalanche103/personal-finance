@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="alfabank">
-  <rect width="40" height="40" rx="8" fill="var(--institution-logo-bg, #f3f4f6)"/>
-  <g transform="translate(6.00 16.27) scale(0.2333)">
-    <path d="M0 37.983h28V44H0v-6.017Zm8.329-14.201h11.044l1.864 6.05h6.124L19.096 4.4C18.297 1.958 17.371 0 14.208 0c-3.164 0-4.133 1.925-4.963 4.4L.596 29.821h5.741l1.992-6.039ZM13.93 6.6h.138l3.717 12.1h-7.775l3.92-12.1Z" fill="#EF3124" fill-rule="evenodd" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="alfabank">
+  <rect width="256" height="256" rx="24" fill="var(--institution-logo-bg, #f3f4f6)"/>
+  <g transform="translate(16.00 16.00) scale(0.605405)">
+    <defs><style>.cls-1{fill:none;}.cls-2{clip-path:url(#clippath);}.cls-3{fill:#fff;}.cls-4{fill:#ef3124;}</style><clipPath id="clippath"><rect class="cls-1" width="370" height="370"/></clipPath></defs><rect class="cls-4" width="370" height="370"/><rect class="cls-3" x="114.28" y="258.75" width="141.44" height="29.39"/><g class="cls-2"><path class="cls-3" d="M210.89,94.41c-4.03-12.03-8.68-21.53-24.61-21.53s-20.87,9.46-25.12,21.53l-43.77,124.41h29.02l10.1-29.58h55.84l9.37,29.58h30.86l-41.71-124.41Zm-45.91,69.85l19.84-58.96h.73l18.74,58.96h-39.31Z"/></g>
   </g>
 </svg>

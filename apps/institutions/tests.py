@@ -13,6 +13,10 @@ class InstitutionBrandingTests(SimpleTestCase):
             institution_logo_path('finstore'),
             'img/institutions/finstore.svg',
         )
+        self.assertEqual(
+            institution_logo_path('nbrb'),
+            'img/institutions/nbrb.svg',
+        )
 
     def test_logo_path_unknown_slug(self):
         self.assertIsNone(institution_logo_path('unknown-bank'))

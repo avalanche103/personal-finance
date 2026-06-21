@@ -1,45 +1,146 @@
 {% extends 'core/base.html' %}
+{% load institution_branding %}
 
 {% block title %}Imports | {{ project_name }}{% endblock %}
 {% block page_title %}Imports{% endblock %}
 
 {% block content %}
 <section class="grid-two">
-    <article class="panel stack-md">
+    <article class="panel import-launcher-panel stack-md">
         <div class="panel-header">
             <div>
-                <p class="eyebrow">Pipeline</p>
-                <h2>Upload file</h2>
+                <p class="eyebrow">Import launcher</p>
+                <h2>Выберите институт</h2>
             </div>
+            <a href="{% url 'imports:history' %}">View history</a>
         </div>
 
-        <div class="upload-zone">
-            <strong>Drop file or paste clipboard data</strong>
-            <p class="muted">XLS/XLSX, PDF preview, API jobs, Finstore TSV paste.</p>
-        </div>
+        <div class="import-workflow" data-import-workflow>
+            <div class="institution-picker import-launcher-picker" role="list" aria-label="Import institutions">
+                {% for group in import_groups %}
+                    <button
+                        type="button"
+                        class="institution-card{% if group.key == selected_group_key %} is-active{% endif %}"
+                        data-import-group-trigger="{{ group.key }}"
+                        aria-pressed="{% if group.key == selected_group_key %}true{% else %}false{% endif %}"
+                    >
+                        {% if group.institution %}
+                            {% institution_logo group.institution size='lg' %}
+                        {% elif group.logo_slug %}
+                            {% institution_logo slug=group.logo_slug name=group.name size='lg' %}
+                        {% else %}
+                            <span
+                                class="institution-logo institution-logo-fallback institution-logo-lg"
+                                style="--institution-accent: {{ group.accent }}"
+                                aria-hidden="true"
+                            >{{ group.initials }}</span>
+                        {% endif %}
+                        <span class="institution-card-body">
+                            <strong>{{ group.name }}</strong>
+                            <span>{{ group.type_label }}</span>
+                        </span>
+                    </button>
+                {% empty %}
+                    <div class="empty-state">No active import sources configured.</div>
+                {% endfor %}
+            </div>
 
-        <form method="post" enctype="multipart/form-data" class="stack-md">
-            {% csrf_token %}
-            <div>
-                {{ form.source.label_tag }}
-                {{ form.source }}
+            <div class="import-action-panels">
+                <div class="import-action-placeholder{% if selected_group_key %} is-hidden{% endif %}" data-import-placeholder>
+                    <p class="eyebrow">Следующий шаг</p>
+                    <h3>Выберите институт</h3>
+                    <p class="muted">После выбора здесь появятся доступные способы импорта и ручного ввода.</p>
+                </div>
+                {% for group in import_groups %}
+                    <div
+                        class="import-action-panel{% if group.key == selected_group_key %} is-active{% endif %}"
+                        data-import-group-panel="{{ group.key }}"
+                    >
+                        <div class="import-action-heading">
+                            <div>
+                                <p class="eyebrow">{{ group.type_label }}</p>
+                                <h3>{{ group.name }}</h3>
+                            </div>
+                            {% if group.description %}
+                                <p class="muted">{{ group.description }}</p>
+                            {% endif %}
+                        </div>
+
+                        <div class="import-action-grid">
+                            {% for action in group.actions %}
+                                <div class="import-action-card">
+                                    <div class="import-action-title">
+                                        <span class="import-action-kind">{{ action.hint }}</span>
+                                        <h4>{{ action.title }}</h4>
+                                        <p class="muted">{{ action.description }}</p>
+                                    </div>
+
+                                    {% if action.kind == 'file' %}
+                                        <form method="post" enctype="multipart/form-data" class="stack-sm">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="source" value="{{ action.source.pk }}">
+                                            <label for="import-file-{{ action.source.pk }}">Файл</label>
+                                            <input id="import-file-{{ action.source.pk }}" type="file" name="file" accept="{{ action.accept }}">
+                                            {% if action.show_errors and form.non_field_errors %}
+                                                <div class="message error">{{ form.non_field_errors }}</div>
+                                            {% endif %}
+                                            <button type="submit" class="button">Create import job</button>
+                                        </form>
+                                    {% elif action.kind == 'clipboard' %}
+                                        <form method="post" enctype="multipart/form-data" class="stack-sm">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="source" value="{{ action.source.pk }}">
+                                            <label for="import-clipboard-{{ action.source.pk }}">Данные из буфера</label>
+                                            <textarea id="import-clipboard-{{ action.source.pk }}" name="clipboard_text" rows="7" placeholder="Вставьте строки Finstore из истории операций"></textarea>
+                                            {% if action.show_errors and form.non_field_errors %}
+                                                <div class="message error">{{ form.non_field_errors }}</div>
+                                            {% endif %}
+                                            <button type="submit" class="button">Import pasted rows</button>
+                                        </form>
+                                    {% elif action.kind == 'api' %}
+                                        <form method="post" action="{% url action.url_name %}">
+                                            {% csrf_token %}
+                                            <button type="submit" class="button button-secondary">Run sync</button>
+                                        </form>
+                                    {% elif action.kind == 'priorlife_manual' %}
+                                        <form method="post" action="{% url 'imports:priorlife_update' %}" class="stack-md">
+                                            {% csrf_token %}
+                                            {% for form_group in priorlife_form.field_groups %}
+                                                <fieldset class="stack-sm compact-fieldset">
+                                                    <legend>{{ form_group.product.name }}</legend>
+                                                    <div>
+                                                        {{ form_group.payment_date.label_tag }}
+                                                        {{ form_group.payment_date }}
+                                                        {% if form_group.payment_date.errors %}
+                                                            <div class="message error">{{ form_group.payment_date.errors }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div>
+                                                        {{ form_group.accumulated_amount.label_tag }}
+                                                        {{ form_group.accumulated_amount }}
+                                                        {% if form_group.accumulated_amount.errors %}
+                                                            <div class="message error">{{ form_group.accumulated_amount.errors }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                    <div>
+                                                        {{ form_group.premium_amount.label_tag }}
+                                                        {{ form_group.premium_amount }}
+                                                        {% if form_group.premium_amount.errors %}
+                                                            <div class="message error">{{ form_group.premium_amount.errors }}</div>
+                                                        {% endif %}
+                                                    </div>
+                                                </fieldset>
+                                            {% endfor %}
+                                            <button type="submit" class="button button-secondary">Обновить Приорлайф</button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endfor %}
             </div>
-            <div>
-                {{ form.file.label_tag }}
-                {{ form.file }}
-            </div>
-            <div>
-                {{ form.clipboard_text.label_tag }}
-                {{ form.clipboard_text }}
-            </div>
-            {% if form.non_field_errors %}
-                <div class="message error">{{ form.non_field_errors }}</div>
-            {% endif %}
-            <div class="form-actions">
-                <button type="submit" class="button">Create import job</button>
-                <a class="button button-secondary" href="{% url 'imports:history' %}">View history</a>
-            </div>
-        </form>
+        </div>
 
         {% if active_job %}
             <div>
@@ -47,66 +148,6 @@
                 {% include 'imports/partials/job_progress.html' with job=active_job progress=active_progress %}
                 <p class="muted"><a href="{% url 'imports:detail' active_job.pk %}">Open job detail</a></p>
             </div>
-        {% endif %}
-
-        <div class="stack-md">
-            <div>
-                <p class="eyebrow">API</p>
-                <h3>Manual sync</h3>
-            </div>
-            <p class="muted">Same flows as the 8-hour scheduler: NBRB pulls the last 7 days; Binance updates Spot, Earn, and Funding.</p>
-            <div class="form-actions">
-                <form method="post" action="{% url 'imports:sync_nbrb' %}">
-                    {% csrf_token %}
-                    <button type="submit" class="button button-secondary">Sync NBRB rates</button>
-                </form>
-                <form method="post" action="{% url 'imports:sync_binance' %}">
-                    {% csrf_token %}
-                    <button type="submit" class="button button-secondary">Sync Binance</button>
-                </form>
-            </div>
-        </div>
-
-        {% if priorlife_products %}
-        <div class="stack-md">
-            <div>
-                <p class="eyebrow">Приорлайф</p>
-                <h3>Ежемесячное обновление</h3>
-            </div>
-            <p class="muted">Дата внесения ежемесячного взноса и текущая сумма продукта из личного кабинета.</p>
-            <form method="post" action="{% url 'imports:priorlife_update' %}" class="stack-md">
-                {% csrf_token %}
-                {% for group in priorlife_form.field_groups %}
-                    <fieldset class="stack-sm">
-                        <legend>{{ group.product.name }}</legend>
-                        <div>
-                            {{ group.payment_date.label_tag }}
-                            {{ group.payment_date }}
-                            {% if group.payment_date.errors %}
-                                <div class="message error">{{ group.payment_date.errors }}</div>
-                            {% endif %}
-                        </div>
-                        <div>
-                            {{ group.accumulated_amount.label_tag }}
-                            {{ group.accumulated_amount }}
-                            {% if group.accumulated_amount.errors %}
-                                <div class="message error">{{ group.accumulated_amount.errors }}</div>
-                            {% endif %}
-                        </div>
-                        <div>
-                            {{ group.premium_amount.label_tag }}
-                            {{ group.premium_amount }}
-                            {% if group.premium_amount.errors %}
-                                <div class="message error">{{ group.premium_amount.errors }}</div>
-                            {% endif %}
-                        </div>
-                    </fieldset>
-                {% endfor %}
-                <div class="form-actions">
-                    <button type="submit" class="button button-secondary">Обновить Приорлайф</button>
-                </div>
-            </form>
-        </div>
         {% endif %}
     </article>
 
@@ -123,4 +164,41 @@
         </div>
     </article>
 </section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    (() => {
+        const workflow = document.querySelector('[data-import-workflow]');
+        if (!workflow) {
+            return;
+        }
+
+        const placeholder = workflow.querySelector('[data-import-placeholder]');
+        const triggers = workflow.querySelectorAll('[data-import-group-trigger]');
+        const panels = workflow.querySelectorAll('[data-import-group-panel]');
+
+        triggers.forEach((trigger) => {
+            trigger.addEventListener('click', () => {
+                const groupKey = trigger.dataset.importGroupTrigger;
+
+                triggers.forEach((item) => {
+                    const isActive = item === trigger;
+                    item.classList.toggle('is-active', isActive);
+                    item.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                });
+
+                panels.forEach((panel) => {
+                    panel.classList.toggle('is-active', panel.dataset.importGroupPanel === groupKey);
+                });
+
+                if (placeholder) {
+                    placeholder.classList.add('is-hidden');
+                }
+
+                trigger.focus({ preventScroll: true });
+            });
+        });
+    })();
+</script>
 {% endblock %}

@@ -3,13 +3,145 @@ from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 
 from apps.imports.forms import ImportUploadForm, PriorlifeManualUpdateForm
-from apps.imports.models import ImportJob
+from apps.imports.models import ImportJob, ImportSource
 from apps.imports.services.details import get_editable_records, infer_record_fields, update_editable_record
 from apps.imports.services.manual_sync import sync_binance_manual, sync_nbrb_rates_manual, sync_priorlife_manual
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
 from apps.imports.services.progress import job_progress
 from apps.imports.services.recent_jobs import recent_import_jobs, recent_import_jobs_queryset
 from apps.common.services.priorlife_insurance import list_priorlife_products
+
+
+SYSTEM_IMPORT_GROUP = {
+    'key': 'system-rates',
+    'name': 'Курсы и справочники',
+    'description': 'Системные данные без отдельного финансового института.',
+    'type_label': 'Сервис',
+    'logo_slug': 'nbrb',
+}
+
+FILE_ACTION_META = {
+    ImportSource.SourceType.PDF: {
+        'title': 'Загрузить PDF',
+        'description': 'Выписки, отчеты и страховые документы в PDF.',
+        'accept': '.pdf,application/pdf',
+        'hint': 'PDF statement',
+    },
+    ImportSource.SourceType.XLS: {
+        'title': 'Загрузить Excel',
+        'description': 'История операций или брокерский отчет XLS/XLSX.',
+        'accept': '.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'hint': 'XLS/XLSX report',
+    },
+}
+
+API_ACTIONS = {
+    'binance-api': {
+        'title': 'Синхронизировать Binance',
+        'description': 'Обновляет Spot, Earn и Funding через read-only API.',
+        'hint': 'API sync',
+        'url_name': 'imports:sync_binance',
+    },
+    'nbrb-exrates-api': {
+        'title': 'Обновить курсы НБРБ',
+        'description': 'Загружает последние курсы по отслеживаемым валютам.',
+        'hint': 'API sync',
+        'url_name': 'imports:sync_nbrb',
+    },
+}
+
+
+def _group_for_source(source):
+    institution = source.institution
+    if institution:
+        return {
+            'key': f'institution-{institution.pk}',
+            'institution': institution,
+            'name': institution.name,
+            'description': institution.website or institution.get_institution_type_display(),
+            'type_label': institution.get_institution_type_display(),
+            'actions': [],
+        }
+    return {**SYSTEM_IMPORT_GROUP, 'actions': []}
+
+
+def _posted_source_pk(request):
+    try:
+        return int(request.POST.get('source') or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_import_groups(priorlife_products, posted_source_pk=None):
+    groups = {}
+    ordered_groups = []
+    sources = (
+        ImportSource.objects.filter(is_active=True)
+        .select_related('institution')
+        .order_by('institution__name', 'source_type', 'name')
+    )
+
+    for source in sources:
+        group = _group_for_source(source)
+        if group['key'] not in groups:
+            groups[group['key']] = group
+            ordered_groups.append(group)
+        else:
+            group = groups[group['key']]
+
+        if source.source_type in FILE_ACTION_META:
+            meta = FILE_ACTION_META[source.source_type]
+            group['actions'].append(
+                {
+                    'kind': 'file',
+                    'source': source,
+                    'title': meta['title'],
+                    'description': meta['description'],
+                    'accept': meta['accept'],
+                    'hint': meta['hint'],
+                    'show_errors': posted_source_pk == source.pk,
+                }
+            )
+
+        if source.code == 'finstore-history':
+            group['actions'].append(
+                {
+                    'kind': 'clipboard',
+                    'source': source,
+                    'title': 'Вставить операции',
+                    'description': 'Быстрый импорт строк Finstore из буфера обмена.',
+                    'hint': 'TSV clipboard',
+                    'show_errors': posted_source_pk == source.pk,
+                }
+            )
+
+        api_action = API_ACTIONS.get(source.code)
+        if api_action:
+            group['actions'].append({'kind': 'api', 'source': source, **api_action})
+
+    if priorlife_products:
+        for group in ordered_groups:
+            institution = group.get('institution')
+            if institution and institution.slug == 'priorlife':
+                group['actions'].append(
+                    {
+                        'kind': 'priorlife_manual',
+                        'title': 'Ручное обновление договора',
+                        'description': 'Дата взноса и текущая сумма продукта из личного кабинета.',
+                        'hint': 'Manual input',
+                    }
+                )
+                break
+
+    ordered_groups = [group for group in ordered_groups if group['actions']]
+    selected_group_key = ''
+    if posted_source_pk:
+        for group in ordered_groups:
+            if any(action.get('source') and action['source'].pk == posted_source_pk for action in group['actions']):
+                selected_group_key = group['key']
+                break
+
+    return ordered_groups, selected_group_key
 
 
 def import_upload(request):
@@ -33,10 +165,13 @@ def import_upload(request):
     )
     highlight_job_ids = request.session.pop('recent_job_ids', [])
     priorlife_products = list_priorlife_products()
+    import_groups, selected_group_key = _build_import_groups(priorlife_products, _posted_source_pk(request))
     context = {
         'form': form,
         'priorlife_form': PriorlifeManualUpdateForm(priorlife_products),
         'priorlife_products': priorlife_products,
+        'import_groups': import_groups,
+        'selected_group_key': selected_group_key,
         'recent_jobs': recent_import_jobs(),
         'highlight_job_ids': highlight_job_ids,
         'active_job': active_job,

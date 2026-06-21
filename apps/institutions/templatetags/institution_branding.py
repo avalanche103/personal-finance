@@ -10,9 +10,13 @@ register = template.Library()
 
 
 @register.inclusion_tag('institutions/partials/logo.html')
-def institution_logo(institution, *, size='md'):
-    slug = getattr(institution, 'slug', '') or ''
-    name = getattr(institution, 'name', '') or ''
+def institution_logo(institution=None, *, size='md', slug=None, name=''):
+    if institution is not None:
+        slug = getattr(institution, 'slug', '') or ''
+        name = getattr(institution, 'name', '') or ''
+    else:
+        slug = (slug or '').strip()
+        name = (name or '').strip()
     return {
         'logo_path': institution_logo_path(slug),
         'initials': institution_initials(name),

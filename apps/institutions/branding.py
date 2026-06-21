@@ -13,6 +13,7 @@ INSTITUTION_LOGO_SLUGS = frozenset(
         'binance',
         'bnb-bank',
         'finstore',
+        'nbrb',
         'priorlife',
         'stravita',
     }
@@ -27,6 +28,7 @@ INSTITUTION_ACCENT_COLORS = {
     'bynex': '#2563EB',
     'finstore': '#00A3E0',
     'income-sources': '#6B7280',
+    'nbrb': '#1B4B8C',
     'priorlife': '#E85D04',
     'stravita': '#003DA5',
 }

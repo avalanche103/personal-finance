@@ -442,6 +442,7 @@ h3 {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--grid-gap);
+    align-items: start;
 }
 
 .compact-grid {
@@ -722,6 +723,196 @@ button {
     margin-bottom: 0.25rem;
 }
 
+.import-launcher-panel.stack-md {
+    gap: 0;
+}
+
+.import-launcher-panel .panel-header {
+    margin-bottom: 0.75rem;
+}
+
+.import-launcher-panel .panel-header h2 {
+    margin-bottom: 0;
+}
+
+.import-launcher-picker {
+    margin-bottom: 0;
+}
+
+.import-workflow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.import-action-panels {
+    width: 100%;
+    margin-top: 1.25rem;
+    min-height: 6.5rem;
+}
+
+.institution-picker {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    width: 100%;
+    align-items: start;
+}
+
+.institution-card {
+    all: unset;
+    box-sizing: border-box;
+    width: 100%;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 0.45rem;
+    text-align: center;
+    color: var(--text);
+    transition: color 0.15s ease;
+}
+
+.institution-card img.institution-logo {
+    display: block;
+}
+
+.institution-card .institution-logo-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.institution-card .institution-logo {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.institution-card:hover .institution-logo,
+.institution-card.is-active .institution-logo {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-sm);
+}
+
+.institution-card.is-active {
+    color: var(--accent);
+}
+
+.institution-card-body {
+    display: grid;
+    gap: 0.15rem;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 2.05rem;
+}
+
+.institution-card-body strong,
+.institution-card-body span {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    line-height: 1.2;
+    white-space: normal;
+}
+
+.institution-card-body strong {
+    font-size: 0.75rem;
+}
+
+.institution-card-body span {
+    color: var(--text-secondary);
+    font-size: 0.625rem;
+    -webkit-line-clamp: 1;
+}
+
+.import-action-panel {
+    display: none;
+}
+
+.import-action-panel.is-active {
+    display: block;
+}
+
+.import-action-placeholder {
+    padding: 1rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg);
+}
+
+.import-action-placeholder h3 {
+    margin: 0;
+}
+
+.import-action-placeholder .muted {
+    margin: 0.35rem 0 0;
+}
+
+.import-action-placeholder.is-hidden {
+    display: none;
+}
+
+.import-action-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.import-action-heading h3,
+.import-action-title h4 {
+    margin: 0;
+}
+
+.import-action-heading > .muted {
+    max-width: 18rem;
+    margin: 0;
+    text-align: right;
+}
+
+.import-action-grid {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.import-action-card {
+    padding: 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+}
+
+.import-action-title {
+    margin-bottom: 0.75rem;
+}
+
+.import-action-title .muted {
+    margin: 0.25rem 0 0;
+}
+
+.import-action-kind {
+    display: inline-flex;
+    margin-bottom: 0.35rem;
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.compact-fieldset {
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
 .progress-track {
     height: 6px;
     border-radius: 3px;
@@ -916,6 +1107,12 @@ button {
     height: 36px;
 }
 
+.institution-logo-lg {
+    width: 150px;
+    height: 150px;
+    border-radius: 18px;
+}
+
 .institution-logo-sm {
     width: 28px;
     height: 28px;
@@ -990,6 +1187,10 @@ button {
 
 .institution-logo-fallback.institution-logo-sm {
     font-size: 0.625rem;
+}
+
+.institution-logo-fallback.institution-logo-lg {
+    font-size: 0.875rem;
 }
 
 .product-link {
@@ -1376,6 +1577,10 @@ button {
     .allocation-grid {
         grid-template-columns: 1fr;
     }
+
+    .institution-picker {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 600px) {
@@ -1392,7 +1597,17 @@ button {
 
     .panel-header,
     .filter-bar,
-    .topbar-actions {
+    .topbar-actions,
+    .import-action-heading {
         flex-wrap: wrap;
+    }
+
+    .institution-picker {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .import-action-heading > .muted {
+        max-width: none;
+        text-align: left;
     }
 }
