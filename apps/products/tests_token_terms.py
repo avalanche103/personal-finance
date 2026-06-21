@@ -91,6 +91,8 @@ class TokenTermsServiceTests(TestCase):
 		self.assertEqual(timezone.localdate(transaction.occurred_at), last_payment)
 
 	def test_estimate_next_income_amount_from_annual_rate(self):
+		self.finstore.slug = 'other-broker'
+		self.finstore.save(update_fields=['slug', 'updated_at'])
 		self.product.annual_rate_pct = Decimal('19.00')
 		self.product.units = Decimal('10')
 		self.product.current_price = Decimal('100')
@@ -159,6 +161,67 @@ class TokenTermsServiceTests(TestCase):
 		self.assertEqual(updated, 1)
 		self.assertEqual(self.product.income_schedule, Product.IncomeSchedule.MONTHLY)
 		self.assertEqual(self.product.next_income_date, date(2026, 5, 20))
+
+	def test_estimate_next_income_amount_uses_median_when_history_stable(self):
+		self.finstore.slug = 'other-broker'
+		self.finstore.save(update_fields=['slug', 'updated_at'])
+		self.product.annual_rate_pct = Decimal('17.00')
+		self.product.units = Decimal('10')
+		self.product.current_price = Decimal('20')
+		self.product.income_schedule = Product.IncomeSchedule.MONTHLY
+		self.product.save()
+
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product,
+			currency=self.usd,
+			transaction_type=Transaction.TransactionType.TRADE,
+			amount=Decimal('-200.00'),
+			quantity=Decimal('10'),
+			occurred_at=timezone.make_aware(datetime(2026, 1, 1, 3, 0, 0)),
+			import_fingerprint='token-terms-median-buy',
+			metadata={'operation_type': 'Покупка'},
+		)
+
+		for month, amount in ((3, Decimal('2.89')), (4, Decimal('2.79')), (5, Decimal('2.89'))):
+			Transaction.objects.create(
+				account=self.account,
+				product=self.product,
+				currency=self.usd,
+				transaction_type=Transaction.TransactionType.INCOME,
+				amount=amount,
+				quantity=Decimal('0'),
+				occurred_at=timezone.make_aware(datetime(2026, month, 5, 3, 0, 0)),
+				import_fingerprint=f'token-terms-median-{month}',
+				metadata={'operation_type': 'Получение дохода'},
+			)
+
+		amount, _ = estimate_next_income_amount(self.product, payment_date=date(2026, 6, 5))
+		self.assertEqual(amount, Decimal('2.89'))
+
+	def test_upcoming_token_income_dates_lists_all_payments_in_window(self):
+		self.product.income_schedule = Product.IncomeSchedule.MONTHLY
+		self.product.save(update_fields=['income_schedule', 'updated_at'])
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product,
+			currency=self.usd,
+			transaction_type=Transaction.TransactionType.INCOME,
+			amount=Decimal('1.00'),
+			quantity=Decimal('0'),
+			occurred_at=timezone.make_aware(datetime(2026, 4, 10, 3, 0, 0)),
+			import_fingerprint='token-terms-upcoming-apr',
+			metadata={'operation_type': 'Получение дохода'},
+		)
+
+		from apps.products.services.token_terms import upcoming_token_income_dates
+
+		dates = upcoming_token_income_dates(
+			self.product,
+			reference=date(2026, 4, 15),
+			window_end=date(2026, 6, 14),
+		)
+		self.assertEqual(dates, [date(2026, 5, 10), date(2026, 6, 10)])
 
 	def test_csv_next_income_is_not_applied_from_file(self):
 		csv_body = (

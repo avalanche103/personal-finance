@@ -67,14 +67,16 @@ class OperationsCalendarTests(TestCase):
         self.assertTrue(dates)
         self.assertTrue(all(day_date >= reference for day_date in dates))
         self.assertEqual(dates[0], date(2026, 5, 10))
+        self.assertIn(date(2026, 6, 10), dates)
 
         forecast_events = [
             event
             for day in calendar
             for group in day['groups']
             for event in group['events']
+            if event['kind'] == 'income_forecast'
         ]
-        self.assertEqual(len(forecast_events), 1)
+        self.assertEqual(len(forecast_events), 2)
         self.assertTrue(all(event['is_forecast'] for event in forecast_events))
 
     def test_calendar_includes_forecast_amount_when_rate_set(self):

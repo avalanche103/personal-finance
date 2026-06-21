@@ -277,29 +277,79 @@ def estimate_next_income_amount(
 	product: Product,
 	*,
 	payment_dates: list[date] | None = None,
+	payment_date: date | None = None,
+	today: date | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
-	"""Coupon per period from annual_rate_pct, units, and price. Returns (native, usd)."""
-	from apps.common.services.indexed_bonds import latest_usd_byn_rate, planned_coupon_usd_per_unit
+	"""Coupon per period. Returns (native, usd)."""
+	from apps.common.services.finstore_income import estimate_finstore_income_amount, is_finstore_token
+	from apps.common.services.indexed_bonds import latest_usd_byn_rate, planned_coupon_usd_per_unit, units_held_on_date
 
 	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product)
-	next_payment_date = product.next_income_date
-	if next_payment_date is None:
-		next_payment_date = estimate_next_income_date(product)
-	planned_usd = planned_coupon_usd_per_unit(product, next_payment_date)
-	if planned_usd is not None and (product.units or Decimal('0')) > 0:
-		amount_usd = (planned_usd * product.units).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
-		usd_byn_rate = latest_usd_byn_rate()
-		if usd_byn_rate is None and isinstance(product.metadata, dict):
-			usd_byn_rate = _parse_decimal(str(product.metadata.get('placement_fx_rate', '')))
-		amount_native = None
-		if usd_byn_rate:
-			amount_native = (amount_usd * usd_byn_rate).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
-		return amount_native, amount_usd
+	target_date = payment_date or product.next_income_date
+	if target_date is None:
+		target_date = estimate_next_income_date(product, today=today)
+
+	if is_finstore_token(product) and target_date is not None:
+		finstore_native, finstore_usd = estimate_finstore_income_amount(
+			product,
+			target_date,
+			today=today,
+		)
+		if finstore_native is not None:
+			return finstore_native, finstore_usd
+
+	planned_usd = planned_coupon_usd_per_unit(product, target_date)
+	if planned_usd is not None:
+		held_units = units_held_on_date(product, target_date or timezone.localdate())
+		if held_units <= 0:
+			held_units = product.units or Decimal('0')
+		if held_units > 0:
+			amount_usd = (planned_usd * held_units).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+			usd_byn_rate = latest_usd_byn_rate()
+			if usd_byn_rate is None and isinstance(product.metadata, dict):
+				usd_byn_rate = _parse_decimal(str(product.metadata.get('placement_fx_rate', '')))
+			amount_native = None
+			if usd_byn_rate:
+				amount_native = (amount_usd * usd_byn_rate).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
+			return amount_native, amount_usd
+
+	median_native, median_usd = median_recent_income_amount(product, before=target_date)
+	if median_native is not None and target_date is not None:
+		recent_before = recent_income_transactions(product, limit=6, before=target_date)
+		last_payment = timezone.localdate(recent_before[0].occurred_at) if recent_before else None
+		if last_payment is not None:
+			held_at_target = units_held_on_date(product, target_date)
+			held_at_last = units_held_on_date(product, last_payment)
+			if held_at_target > 0 and held_at_last > 0:
+				drift = abs(held_at_target - held_at_last) / held_at_target
+				if drift <= Decimal('0.05'):
+					native_values = [tx.amount for tx in recent_before if tx.amount is not None]
+					if _income_amounts_are_consistent(native_values):
+						amount_native, amount_usd = _scale_income_amounts(
+							median_native,
+							median_usd,
+							held_at_target=held_at_target,
+							held_at_last=held_at_last,
+						)
+						return amount_native, amount_usd
+					latest_native = recent_before[0].amount
+					latest_usd = recent_before[0].amount_usd or None
+					if latest_native is not None:
+						amount_native, amount_usd = _scale_income_amounts(
+							latest_native,
+							latest_usd,
+							held_at_target=held_at_target,
+							held_at_last=held_at_last,
+						)
+						return amount_native, amount_usd
 
 	if product.annual_rate_pct is None or product.annual_rate_pct <= 0:
 		return None, None
 
-	principal = product.market_value
+	held_units = units_held_on_date(product, target_date or timezone.localdate())
+	if held_units <= 0:
+		held_units = product.units or Decimal('0')
+	principal = held_units * (product.current_price or Decimal('0'))
 	if principal <= 0:
 		return None, None
 
@@ -316,9 +366,14 @@ def estimate_next_income_amount(
 	).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 	amount_usd = None
-	if product.current_value_usd and product.current_value_usd > 0:
+	principal_usd = held_units * (product.current_price or Decimal('0'))
+	if product.currency and product.currency.code == 'USD':
+		principal_usd = principal
+	if product.current_value_usd and product.units and product.units > 0:
+		principal_usd = product.current_value_usd * held_units / product.units
+	if principal_usd > 0:
 		amount_usd = (
-			product.current_value_usd * product.annual_rate_pct / Decimal('100') / Decimal(periods_per_year)
+			principal_usd * product.annual_rate_pct / Decimal('100') / Decimal(periods_per_year)
 		).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 	elif getattr(product, 'currency', None) is not None and product.currency.usd_rate:
 		amount_usd = (period_income * product.currency.usd_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -354,6 +409,62 @@ def income_payment_dates(product: Product) -> list[date]:
 def last_income_payment_date(product: Product) -> date | None:
 	dates = income_payment_dates(product)
 	return dates[-1] if dates else None
+
+
+def _income_amounts_are_consistent(amounts: list[Decimal], *, tolerance: Decimal = Decimal('0.25')) -> bool:
+	if len(amounts) < 2:
+		return False
+	low, high = min(amounts), max(amounts)
+	if low <= 0:
+		return False
+	return (high - low) / low <= tolerance
+
+
+def _scale_income_amounts(
+	native: Decimal | None,
+	usd: Decimal | None,
+	*,
+	held_at_target: Decimal,
+	held_at_last: Decimal,
+) -> tuple[Decimal | None, Decimal | None]:
+	if held_at_last <= 0 or held_at_target <= 0 or held_at_last == held_at_target:
+		return native, usd
+	scale = held_at_target / held_at_last
+	if native is not None:
+		native = (native * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	if usd is not None:
+		usd = (usd * scale).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	return native, usd
+
+
+def recent_income_transactions(product: Product, *, limit: int = 6, before: date | None = None) -> list[Transaction]:
+	transactions: list[Transaction] = []
+	for tx in Transaction.objects.filter(product=product).order_by('-occurred_at', '-id'):
+		if not is_income_transaction(tx):
+			continue
+		if before is not None and timezone.localdate(tx.occurred_at) >= before:
+			continue
+		transactions.append(tx)
+		if len(transactions) >= limit:
+			break
+	return transactions
+
+
+def median_recent_income_amount(
+	product: Product,
+	*,
+	limit: int = 6,
+	before: date | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
+	recent = recent_income_transactions(product, limit=limit, before=before)
+	if len(recent) < 2:
+		return None, None
+
+	native_values = [tx.amount for tx in recent if tx.amount is not None]
+	usd_values = [tx.amount_usd for tx in recent if tx.amount_usd]
+	median_native = median(native_values).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if native_values else None
+	median_usd = median(usd_values).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if usd_values else None
+	return median_native, median_usd
 
 
 def infer_schedule_from_payment_dates(dates: list[date]) -> str:
@@ -415,6 +526,40 @@ def maybe_update_income_schedule_from_history(product: Product, payment_dates: l
 	product.income_schedule = inferred
 	product.save(update_fields=['income_schedule', 'updated_at'])
 	return True
+
+
+def upcoming_token_income_dates(
+	product: Product,
+	*,
+	reference: date,
+	window_end: date,
+) -> list[date]:
+	"""All scheduled token/bond income dates from reference through window_end."""
+	if product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
+		if product.maturity_date and reference <= product.maturity_date <= window_end:
+			return [product.maturity_date]
+		return []
+
+	if product.product_type == Product.ProductType.DEPOSIT and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+		from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
+
+		return upcoming_deposit_income_dates(product, reference=reference, window_end=window_end)
+
+	dates: list[date] = []
+	cursor = reference
+	for _ in range(48):
+		next_date = estimate_next_income_date(product, today=cursor)
+		if next_date is None or next_date in dates:
+			break
+		if next_date > window_end:
+			break
+		if product.maturity_date and next_date > product.maturity_date:
+			break
+		dates.append(next_date)
+		if next_date >= window_end:
+			break
+		cursor = next_date + timedelta(days=1)
+	return dates
 
 
 def estimate_next_income_date(product: Product, *, today: date | None = None) -> date | None:

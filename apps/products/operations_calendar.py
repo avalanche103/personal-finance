@@ -9,7 +9,10 @@ from django.utils import timezone
 from apps.products.analytics import product_group_label, product_group_key
 from apps.products.models import Product
 from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
-from apps.products.services.token_terms import estimate_next_income_amount, estimate_next_income_date
+from apps.products.services.token_terms import (
+    estimate_next_income_amount,
+    upcoming_token_income_dates,
+)
 
 
 def _event_sort_key(event: dict) -> tuple:
@@ -214,24 +217,30 @@ def build_operations_calendar(
                 )
             continue
 
-        forecast_date = estimate_next_income_date(product, today=reference)
-        if forecast_date is None or forecast_date < reference or forecast_date > window_end:
-            continue
-
-        amount, amount_usd = estimate_next_income_amount(product)
-        _append_income_event(
-            day_groups,
-            product=product,
-            label=label,
-            forecast_date=forecast_date,
-            amount=amount,
-            amount_usd=amount_usd,
-            description=(
-                f'{product.annual_rate_pct}% p.a. · position × rate / period'
-                if product.annual_rate_pct
-                else 'Estimated from income payment history'
-            ),
+        forecast_dates = upcoming_token_income_dates(
+            product,
+            reference=reference,
+            window_end=window_end,
         )
+        for forecast_date in forecast_dates:
+            amount, amount_usd = estimate_next_income_amount(
+                product,
+                payment_date=forecast_date,
+                today=reference,
+            )
+            _append_income_event(
+                day_groups,
+                product=product,
+                label=label,
+                forecast_date=forecast_date,
+                amount=amount,
+                amount_usd=amount_usd,
+                description=(
+                    f'{product.annual_rate_pct}% p.a. · position × rate / period'
+                    if product.annual_rate_pct
+                    else 'Estimated from income payment history'
+                ),
+            )
 
     calendar_days = []
     for day in sorted(day_groups.keys()):
