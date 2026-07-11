@@ -133,6 +133,57 @@
                                             {% endfor %}
                                             <button type="submit" class="button button-secondary">Обновить Приорлайф</button>
                                         </form>
+                                    {% elif action.kind == 'cash_manual' %}
+                                        <form method="post" action="{% url 'imports:cash_operation' %}" class="stack-md">
+                                            {% csrf_token %}
+                                            {% if cash_form.single_cash_account %}
+                                                <input type="hidden" name="cash_account" value="{{ cash_form.single_cash_account.pk }}">
+                                            {% else %}
+                                                <div>
+                                                    {{ cash_form.cash_account.label_tag }}
+                                                    {{ cash_form.cash_account }}
+                                                    {% if cash_form.cash_account.errors %}
+                                                        <div class="message error">{{ cash_form.cash_account.errors }}</div>
+                                                    {% endif %}
+                                                </div>
+                                            {% endif %}
+                                            <div>
+                                                {{ cash_form.operation.label_tag }}
+                                                {{ cash_form.operation }}
+                                                {% if cash_form.operation.errors %}
+                                                    <div class="message error">{{ cash_form.operation.errors }}</div>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                {{ cash_form.amount.label_tag }}
+                                                {{ cash_form.amount }}
+                                                {% if cash_form.amount.errors %}
+                                                    <div class="message error">{{ cash_form.amount.errors }}</div>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                {{ cash_form.occurred_at.label_tag }}
+                                                {{ cash_form.occurred_at }}
+                                                {% if cash_form.occurred_at.errors %}
+                                                    <div class="message error">{{ cash_form.occurred_at.errors }}</div>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                {{ cash_form.related_account.label_tag }}
+                                                {{ cash_form.related_account }}
+                                                {% if cash_form.related_account.errors %}
+                                                    <div class="message error">{{ cash_form.related_account.errors }}</div>
+                                                {% endif %}
+                                            </div>
+                                            <div>
+                                                {{ cash_form.description.label_tag }}
+                                                {{ cash_form.description }}
+                                                {% if cash_form.description.errors %}
+                                                    <div class="message error">{{ cash_form.description.errors }}</div>
+                                                {% endif %}
+                                            </div>
+                                            <button type="submit" class="button button-secondary">Записать операцию</button>
+                                        </form>
                                     {% endif %}
                                 </div>
                             {% endfor %}

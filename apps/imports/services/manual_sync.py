@@ -14,6 +14,7 @@ from apps.accounts.services.binance import (
 	sync_earn_and_funding,
 	sync_spot_balances,
 )
+from apps.common.services.cash_operations import record_cash_operation
 from apps.common.services.exchange_rates import recalculate_usd_valuations, sync_nbrb_rate_history
 from apps.imports.models import ImportJob
 from apps.imports.services.recent_jobs import mark_import_jobs_recent, record_manual_sync_job
@@ -221,6 +222,46 @@ def sync_binance_manual() -> ManualSyncResult:
 			'partial': bool(step_failures),
 		},
 	)
+
+
+def sync_cash_manual(payload: dict) -> ManualSyncResult:
+	job = record_manual_sync_job(
+		source_code='cash-manual',
+		parser_name='cash-manual',
+		status=ImportJob.Status.PARSING,
+		details={'operation': payload.get('operation')},
+	)
+	try:
+		result = record_cash_operation(
+			operation=payload['operation'],
+			amount=payload['amount'],
+			occurred_at=payload['occurred_at'],
+			cash_account=payload.get('cash_account'),
+			related_account=payload.get('related_account'),
+			description=payload.get('description', ''),
+			import_job=job,
+		)
+	except Exception as exc:
+		logger.exception('Manual cash operation failed')
+		job.status = ImportJob.Status.FAILED
+		job.error_message = str(exc)
+		job.finished_at = timezone.now()
+		job.save(update_fields=['status', 'error_message', 'finished_at', 'updated_at'])
+		return ManualSyncResult(False, f'Наличные: {exc}', job_ids=[job.pk])
+
+	job.status = ImportJob.Status.SAVED
+	job.records_created = len(result.transaction_ids)
+	job.rows_detected = 1
+	job.finished_at = timezone.now()
+	job.details = {
+		**(job.details or {}),
+		'operation': result.operation,
+		'transaction_ids': result.transaction_ids,
+	}
+	job.save(update_fields=['status', 'records_created', 'rows_detected', 'finished_at', 'details', 'updated_at'])
+	mark_import_jobs_recent([job.pk], note='Manual cash operation')
+	message = f'Наличные: операция записана. Job #{job.pk}.'
+	return ManualSyncResult(True, message, job_ids=[job.pk], details={'transaction_ids': result.transaction_ids})
 
 
 def sync_priorlife_manual(updates: list[dict]) -> ManualSyncResult:

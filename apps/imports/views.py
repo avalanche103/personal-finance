@@ -2,14 +2,21 @@ from django.contrib import messages
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 
-from apps.imports.forms import ImportUploadForm, PriorlifeManualUpdateForm
+from apps.imports.forms import CashManualOperationForm, ImportUploadForm, PriorlifeManualUpdateForm
 from apps.imports.models import ImportJob, ImportSource
 from apps.imports.services.details import get_editable_records, infer_record_fields, update_editable_record
-from apps.imports.services.manual_sync import sync_binance_manual, sync_nbrb_rates_manual, sync_priorlife_manual
+from apps.imports.services.manual_sync import (
+	sync_binance_manual,
+	sync_cash_manual,
+	sync_nbrb_rates_manual,
+	sync_priorlife_manual,
+)
 from apps.imports.services.pipeline import process_clipboard_import, process_uploaded_import
 from apps.imports.services.progress import job_progress
 from apps.imports.services.recent_jobs import recent_import_jobs, recent_import_jobs_queryset
 from apps.common.services.priorlife_insurance import list_priorlife_products
+from apps.accounts.models import Account
+from apps.common.services.cash_operations import CASH_INSTITUTION_SLUG
 
 
 SYSTEM_IMPORT_GROUP = {
@@ -115,6 +122,17 @@ def _build_import_groups(priorlife_products, posted_source_pk=None):
                 }
             )
 
+        if source.code == 'cash-manual':
+            group['actions'].append(
+                {
+                    'kind': 'cash_manual',
+                    'source': source,
+                    'title': 'Записать операцию',
+                    'description': 'Пополнение, расход или перевод между наличными и банковским счётом.',
+                    'hint': 'Manual input',
+                }
+            )
+
         api_action = API_ACTIONS.get(source.code)
         if api_action:
             group['actions'].append({'kind': 'api', 'source': source, **api_action})
@@ -142,6 +160,25 @@ def _build_import_groups(priorlife_products, posted_source_pk=None):
                 break
 
     return ordered_groups, selected_group_key
+
+
+def _cash_manual_context():
+    cash_accounts = list(
+        Account.objects.filter(
+            institution__slug=CASH_INSTITUTION_SLUG,
+            account_type=Account.AccountType.CASH,
+            is_active=True,
+        )
+        .select_related('currency', 'institution')
+        .order_by('name')
+    )
+    transfer_accounts = Account.objects.exclude(
+        institution__slug=CASH_INSTITUTION_SLUG,
+    ).select_related('currency', 'institution').order_by('institution__name', 'name')
+    return {
+        'cash_form': CashManualOperationForm(cash_accounts, transfer_accounts),
+        'cash_accounts': cash_accounts,
+    }
 
 
 def import_upload(request):
@@ -176,6 +213,7 @@ def import_upload(request):
         'highlight_job_ids': highlight_job_ids,
         'active_job': active_job,
         'active_progress': job_progress(active_job) if active_job else None,
+        **_cash_manual_context(),
     }
     return render(request, 'imports/upload.html', context)
 
@@ -262,6 +300,39 @@ def import_priorlife_update(request):
 		return redirect('imports:upload')
 
 	result = sync_priorlife_manual(form.cleaned_contract_updates())
+	if result.success:
+		messages.success(request, result.message)
+	else:
+		messages.error(request, result.message)
+	if result.job_ids:
+		request.session['recent_job_ids'] = result.job_ids
+	return redirect('imports:upload')
+
+
+def import_cash_operation(request):
+	if request.method != 'POST':
+		return HttpResponseBadRequest('POST required')
+
+	cash_accounts = list(
+		Account.objects.filter(
+			institution__slug=CASH_INSTITUTION_SLUG,
+			account_type=Account.AccountType.CASH,
+			is_active=True,
+		).select_related('currency', 'institution')
+	)
+	transfer_accounts = Account.objects.exclude(
+		institution__slug=CASH_INSTITUTION_SLUG,
+	).select_related('currency', 'institution')
+	form = CashManualOperationForm(cash_accounts, transfer_accounts, request.POST)
+	if not form.is_valid():
+		for error in form.non_field_errors():
+			messages.error(request, error)
+		for field_errors in form.errors.values():
+			for error in field_errors:
+				messages.error(request, error)
+		return redirect('imports:upload')
+
+	result = sync_cash_manual(form.cleaned_payload())
 	if result.success:
 		messages.success(request, result.message)
 	else:

@@ -26,6 +26,7 @@ INSTITUTION_ACCENT_COLORS = {
     'binance': '#F0B90B',
     'bnb-bank': '#006838',
     'bynex': '#2563EB',
+    'cash': '#059669',
     'finstore': '#00A3E0',
     'income-sources': '#6B7280',
     'nbrb': '#1B4B8C',

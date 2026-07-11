@@ -175,6 +175,20 @@ class Command(BaseCommand):
 				'metadata': {'bootstrap': True, 'purpose': 'payroll_source'},
 			},
 		)
+		cash_institution, _ = FinancialInstitution.objects.update_or_create(
+			slug='cash',
+			defaults={
+				'name': 'Наличные',
+				'institution_type': FinancialInstitution.InstitutionType.OTHER,
+				'country': 'BY',
+				'base_currency': byn,
+				'metadata': {
+					'bootstrap': True,
+					'purpose': 'physical_cash',
+					'operations': ['deposit', 'withdrawal', 'transfer_out', 'transfer_in'],
+				},
+			},
+		)
 
 		ImportSource.objects.update_or_create(
 			code='nbrb-exrates-api',
@@ -294,6 +308,20 @@ class Command(BaseCommand):
 				'config': {'parser': 'alfabank-deposit-statement', 'bootstrap': True},
 			},
 		)
+		ImportSource.objects.update_or_create(
+			code='cash-manual',
+			defaults={
+				'institution': cash_institution,
+				'name': 'Cash Manual Operations',
+				'source_type': ImportSource.SourceType.MANUAL,
+				'is_active': True,
+				'config': {
+					'parser': 'cash-manual',
+					'bootstrap': True,
+					'operations': ['deposit', 'withdrawal', 'transfer_out', 'transfer_in'],
+				},
+			},
+		)
 
 		Account.objects.get_or_create(
 			institution=aigenis,
@@ -317,6 +345,21 @@ class Command(BaseCommand):
 				'metadata': {'bootstrap': True, 'purpose': 'payroll'},
 			},
 		)
+		for account_name, currency in [
+			('Наличные BYN', byn),
+			('Наличные USD', usd),
+		]:
+			Account.objects.get_or_create(
+				institution=cash_institution,
+				name=account_name,
+				defaults={
+					'account_type': Account.AccountType.CASH,
+					'currency': currency,
+					'current_balance': Decimal('0.00'),
+					'current_balance_usd': Decimal('0.00'),
+					'metadata': {'bootstrap': True},
+				},
+			)
 		Account.objects.get_or_create(
 			institution=alfabank,
 			name='АльфаБанк BYN Account',
