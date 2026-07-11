@@ -8,7 +8,12 @@ from typing import Any
 from django.conf import settings
 from django.utils import timezone
 
-from apps.accounts.services.binance import sync_daily_account_snapshots, sync_earn_and_funding, sync_spot_balances
+from apps.accounts.services.binance import (
+	BinanceSyncResult,
+	sync_daily_account_snapshots,
+	sync_earn_and_funding,
+	sync_spot_balances,
+)
 from apps.common.services.exchange_rates import recalculate_usd_valuations, sync_nbrb_rate_history
 from apps.imports.models import ImportJob
 from apps.imports.services.recent_jobs import mark_import_jobs_recent, record_manual_sync_job
@@ -69,6 +74,17 @@ def sync_nbrb_rates_manual() -> ManualSyncResult:
 	return ManualSyncResult(True, message, job_ids=job_ids, details=result)
 
 
+def _run_binance_step(
+	name: str,
+	run,
+) -> tuple[BinanceSyncResult | None, str | None]:
+	try:
+		return run(), None
+	except Exception as exc:
+		logger.exception('Manual Binance %s sync failed', name)
+		return None, str(exc)
+
+
 def sync_binance_manual() -> ManualSyncResult:
 	if not settings.BINANCE_API_KEY or not settings.BINANCE_API_SECRET:
 		job = record_manual_sync_job(
@@ -85,68 +101,124 @@ def sync_binance_manual() -> ManualSyncResult:
 			details={'skipped': True},
 		)
 
-	try:
-		spot = sync_spot_balances(create_snapshots=True)
-		earn = sync_earn_and_funding()
-		daily = sync_daily_account_snapshots()
-		usd = recalculate_usd_valuations()
-	except Exception as exc:
-		logger.exception('Manual Binance sync failed')
+	step_failures: dict[str, str] = {}
+	spot, spot_error = _run_binance_step('spot', lambda: sync_spot_balances(create_snapshots=True))
+	if spot_error:
+		step_failures['spot'] = spot_error
+
+	earn, earn_error = _run_binance_step('earn', sync_earn_and_funding)
+	if earn_error:
+		step_failures['earn'] = earn_error
+
+	daily, daily_error = _run_binance_step('daily', sync_daily_account_snapshots)
+	if daily_error:
+		step_failures['daily'] = daily_error
+
+	if not any([spot, earn, daily]):
 		job = record_manual_sync_job(
 			source_code='binance-api',
 			parser_name='binance-manual-sync',
 			status=ImportJob.Status.FAILED,
-			error_message=str(exc),
+			error_message='; '.join(f'{name}: {message}' for name, message in step_failures.items()),
+			details={'step_failures': step_failures},
 		)
-		return ManualSyncResult(False, f'Binance sync failed: {exc}', job_ids=[job.pk])
+		return ManualSyncResult(
+			False,
+			f'Binance sync failed: {"; ".join(step_failures.values())}',
+			job_ids=[job.pk],
+			details={'step_failures': step_failures},
+		)
 
-	recalc_job = record_manual_sync_job(
-		source_code='binance-api',
-		parser_name='recalculate-usd-values',
-		status=ImportJob.Status.SAVED,
-		rows_detected=_usd_rows_updated(usd),
-		records_created=_usd_rows_updated(usd),
-		details={'trigger': 'manual-binance-sync', 'usd': usd},
+	usd: dict[str, int] = {}
+	recalc_job: ImportJob | None = None
+	usd_error = None
+	try:
+		usd = recalculate_usd_valuations()
+		recalc_job = record_manual_sync_job(
+			source_code='binance-api',
+			parser_name='recalculate-usd-values',
+			status=ImportJob.Status.SAVED,
+			rows_detected=_usd_rows_updated(usd),
+			records_created=_usd_rows_updated(usd),
+			details={'trigger': 'manual-binance-sync', 'usd': usd},
+		)
+	except Exception as exc:
+		logger.exception('Manual Binance USD recalculation failed')
+		usd_error = str(exc)
+		step_failures['recalculate'] = usd_error
+
+	rows_detected = sum(result.rows_detected for result in (spot, earn, daily) if result)
+	records_created = sum(
+		(result.records_created + result.records_updated)
+		for result in (spot, earn, daily)
+		if result
 	)
+	summary_details: dict[str, Any] = {
+		'spot_job_id': spot.job_id if spot else None,
+		'earn_job_id': earn.job_id if earn else None,
+		'daily_snapshots_job_id': daily.job_id if daily else None,
+		'recalculate_job_id': recalc_job.pk if recalc_job else None,
+		'usd': usd,
+		'daily_snapshots': daily.details if daily else {},
+	}
+	if step_failures:
+		summary_details['step_failures'] = step_failures
+	if daily and daily.details.get('kline_errors'):
+		summary_details['kline_errors'] = daily.details['kline_errors']
+
 	summary = record_manual_sync_job(
 		source_code='binance-api',
 		parser_name='binance-manual-sync',
 		status=ImportJob.Status.SAVED,
-		rows_detected=spot.rows_detected + earn.rows_detected + daily.rows_detected,
-		records_created=spot.records_created + spot.records_updated + earn.records_updated + daily.records_created,
-		details={
-			'spot_job_id': spot.job_id,
-			'earn_job_id': earn.job_id,
-			'daily_snapshots_job_id': daily.job_id,
-			'recalculate_job_id': recalc_job.pk,
-			'usd': usd,
-			'daily_snapshots': daily.details,
-		},
+		rows_detected=rows_detected,
+		records_created=records_created,
+		details=summary_details,
+		error_message='; '.join(f'{name}: {message}' for name, message in step_failures.items()),
 	)
 	job_ids = [
 		job_id
-		for job_id in (summary.pk, spot.job_id, earn.job_id, daily.job_id, recalc_job.pk)
+		for job_id in (
+			summary.pk,
+			spot.job_id if spot else None,
+			earn.job_id if earn else None,
+			daily.job_id if daily else None,
+			recalc_job.pk if recalc_job else None,
+		)
 		if job_id
 	]
 	mark_import_jobs_recent(job_ids, note='Manual Binance sync')
 
-	message = (
-		f'Binance sync completed. Summary job #{summary.pk}, '
-		f'Spot #{spot.job_id or "-"}, Earn #{earn.job_id or "-"}, '
-		f'Daily snapshots #{daily.job_id or "-"}, Recalculate #{recalc_job.pk}.'
-	)
+	step_labels = {
+		'spot': f'Spot #{spot.job_id}' if spot and spot.job_id else None,
+		'earn': f'Earn #{earn.job_id}' if earn and earn.job_id else None,
+		'daily': f'Daily snapshots #{daily.job_id}' if daily and daily.job_id else None,
+		'recalculate': f'Recalculate #{recalc_job.pk}' if recalc_job else None,
+	}
+	completed_parts = [label for label in step_labels.values() if label]
+	failed_parts = [f'{name} ({step_failures[name]})' for name in ('spot', 'earn', 'daily', 'recalculate') if name in step_failures]
+
+	if step_failures:
+		message = (
+			f'Binance sync partially completed. Summary job #{summary.pk}. '
+			f'Completed: {", ".join(completed_parts) or "none"}. '
+			f'Failed: {"; ".join(failed_parts)}.'
+		)
+	else:
+		message = (
+			f'Binance sync completed. Summary job #{summary.pk}, '
+			f'Spot #{spot.job_id if spot else "-"}, Earn #{earn.job_id if earn else "-"}, '
+			f'Daily snapshots #{daily.job_id if daily else "-"}, '
+			f'Recalculate #{recalc_job.pk if recalc_job else "-"}.'
+		)
+
 	return ManualSyncResult(
 		True,
 		message,
 		job_ids=job_ids,
 		details={
+			**summary_details,
 			'summary_job_id': summary.pk,
-			'spot_job_id': spot.job_id,
-			'earn_job_id': earn.job_id,
-			'daily_snapshots_job_id': daily.job_id,
-			'recalculate_job_id': recalc_job.pk,
-			'usd': usd,
-			'daily_snapshots': daily.details,
+			'partial': bool(step_failures),
 		},
 	)
 

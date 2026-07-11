@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -16,6 +17,7 @@ from apps.imports.services.integrations.base import BaseApiClient
 
 
 DEFAULT_BINANCE_API_BASE_URL = 'https://api.binance.com'
+DEFAULT_RECV_WINDOW_MS = 5000
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,32 @@ class BinanceClient(BaseApiClient):
 			hashlib.sha256,
 		).hexdigest()
 
+	def _format_request_error(self, exc: Exception) -> str:
+		if isinstance(exc, HTTPError):
+			body = ''
+			try:
+				body = exc.read().decode('utf-8')
+			except Exception:
+				body = ''
+			if body:
+				try:
+					payload = json.loads(body)
+				except json.JSONDecodeError:
+					payload = None
+				if isinstance(payload, dict):
+					code = payload.get('code')
+					msg = payload.get('msg')
+					if code is not None and msg:
+						return f'Binance API error {code}: {msg}'
+					if msg:
+						return f'Binance API error: {msg}'
+				return f'Binance request failed: HTTP {exc.code}: {body[:500]}'
+			reason = exc.reason or 'Bad Request'
+			return f'Binance request failed: HTTP Error {exc.code}: {reason}'
+		if isinstance(exc, URLError):
+			return f'Binance request failed: {exc.reason or exc}'
+		return f'Binance request failed: {exc}'
+
 	def _request(
 		self,
 		method: str,
@@ -69,6 +97,7 @@ class BinanceClient(BaseApiClient):
 	) -> Any:
 		params = {key: value for key, value in (params or {}).items() if value is not None}
 		if signed:
+			params.setdefault('recvWindow', DEFAULT_RECV_WINDOW_MS)
 			params.setdefault('timestamp', int(time.time() * 1000))
 			query_string = urlencode(params, doseq=True)
 			params['signature'] = self._signature(query_string)
@@ -86,7 +115,7 @@ class BinanceClient(BaseApiClient):
 			with urlopen(request, timeout=self.timeout) as response:
 				raw_body = response.read().decode('utf-8')
 		except Exception as exc:  # pragma: no cover - urllib exceptions vary by platform
-			raise BinanceApiError(f'Binance request failed: {exc}') from exc
+			raise BinanceApiError(self._format_request_error(exc)) from exc
 
 		return json.loads(raw_body) if raw_body else {}
 

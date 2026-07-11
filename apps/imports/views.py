@@ -235,7 +235,10 @@ def import_sync_binance(request):
 
 	result = sync_binance_manual()
 	if result.success:
-		messages.success(request, result.message)
+		if result.details.get('partial'):
+			messages.warning(request, result.message)
+		else:
+			messages.success(request, result.message)
 	else:
 		level = messages.warning if result.details.get('skipped') else messages.error
 		level(request, result.message)

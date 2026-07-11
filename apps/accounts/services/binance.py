@@ -184,19 +184,24 @@ def _daily_kline_close_index(
 	price_symbols: set[str],
 	start_time_ms: int,
 	end_time_ms: int,
-) -> dict[tuple[str, date], Decimal]:
+) -> tuple[dict[tuple[str, date], Decimal], dict[str, str]]:
 	index: dict[tuple[str, date], Decimal] = {}
+	kline_errors: dict[str, str] = {}
 	day_ms = 24 * 60 * 60 * 1000
 	padded_start = max(0, start_time_ms - day_ms)
 	padded_end = end_time_ms + day_ms
 	for symbol in sorted(price_symbols):
-		rows = client.fetch_klines(
-			symbol,
-			interval='1d',
-			start_time=padded_start,
-			end_time=padded_end,
-			limit=BINANCE_DAILY_SNAPSHOT_MAX_DAYS + 2,
-		)
+		try:
+			rows = client.fetch_klines(
+				symbol,
+				interval='1d',
+				start_time=padded_start,
+				end_time=padded_end,
+				limit=BINANCE_DAILY_SNAPSHOT_MAX_DAYS + 2,
+			)
+		except BinanceApiError as exc:
+			kline_errors[symbol] = str(exc)
+			continue
 		if not isinstance(rows, list):
 			continue
 		for row in rows:
@@ -204,7 +209,7 @@ def _daily_kline_close_index(
 				continue
 			day = _ms_to_utc_date(int(row[0]))
 			index[(symbol.upper(), day)] = decimal_from_binance(row[4])
-	return index
+	return index, kline_errors
 
 
 def _historical_asset_price_usd(
@@ -599,7 +604,7 @@ def sync_daily_account_snapshots(
 	for snapshot in spot_snapshots:
 		data = snapshot.get('data') if isinstance(snapshot.get('data'), dict) else {}
 		price_symbols.update(_collect_snapshot_price_symbols(_aggregate_spot_balance_rows(data.get('balances', [])), ticker_prices))
-	daily_closes = _daily_kline_close_index(client, price_symbols, start_time, end_time)
+	daily_closes, kline_errors = _daily_kline_close_index(client, price_symbols, start_time, end_time)
 	job, _ = ImportJob.objects.get_or_create(
 		source=source,
 		idempotency_key=f'binance:daily-snapshots:{timezone.localdate().isoformat()}',
@@ -676,6 +681,7 @@ def sync_daily_account_snapshots(
 			'earn_locked_historical': False,
 			'earn_locked_current_snapshots': len(locked_totals),
 			'missing_prices': sorted(missing_prices),
+			'kline_errors': kline_errors,
 		}
 		job.finished_at = timezone.now()
 		job.error_message = ''
@@ -716,10 +722,11 @@ def reprice_binance_daily_snapshots(
 		_, price_symbol = _asset_price_usd(asset, ticker_prices)
 		if price_symbol:
 			price_symbols.add(price_symbol.upper())
-	daily_closes = _daily_kline_close_index(client, price_symbols, start_ms, end_ms)
+	daily_closes, kline_errors = _daily_kline_close_index(client, price_symbols, start_ms, end_ms)
 	result.details = {
 		'price_symbols': sorted(price_symbols),
 		'daily_closes_loaded': len(daily_closes),
+		'kline_errors': kline_errors,
 	}
 	if dry_run:
 		return result
@@ -1032,6 +1039,11 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 	)
 
 	updated = 0
+	seen_funding_account_external_ids: set[str] = set()
+	seen_funding_product_external_ids: set[str] = set()
+	seen_locked_product_external_ids: set[str] = set()
+	locked_fetch_ok = 'locked_positions' not in errors
+	funding_fetch_ok = 'funding_assets' not in errors
 	with transaction.atomic():
 		for row in funding_assets:
 			raw_asset = str(row.get('asset', '')).upper()
@@ -1040,9 +1052,11 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 			locked_amount = decimal_from_binance(row.get('locked'))
 			freeze = decimal_from_binance(row.get('freeze'))
 			total = free + locked_amount + freeze
+			seen_funding_account_external_ids.add(f'binance:funding:{asset}')
 			_ensure_account(institution, asset, wallet='funding', update_balance=asset in FIAT_ACCOUNT_ASSETS, balance=total)
 			if asset not in FIAT_ACCOUNT_ASSETS:
 				product = _ensure_product(institution, asset, area='funding')
+				seen_funding_product_external_ids.add(product.external_id)
 				price_usd, price_symbol = _asset_price_usd(asset, prices)
 				product.units = _units(total)
 				product.current_price = price_usd
@@ -1082,6 +1096,7 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 			if asset in FIAT_ACCOUNT_ASSETS:
 				continue
 			product = _ensure_product(institution, asset, area='earn_locked')
+			seen_locked_product_external_ids.add(product.external_id)
 			price_usd, price_symbol = _asset_price_usd(asset, prices)
 			amount = summary['amount']
 			product.units = _units(amount)
@@ -1100,6 +1115,56 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 			product.metadata = metadata
 			product.save(update_fields=['units', 'current_price', 'current_value_usd', 'is_active', 'metadata', 'updated_at'])
 			updated += 1
+
+		if funding_fetch_ok:
+			stale_funding_products = Product.objects.filter(
+				institution=institution,
+				external_id__startswith='binance:funding:',
+				metadata__source='binance',
+			).exclude(external_id__in=seen_funding_product_external_ids)
+			for product in stale_funding_products:
+				product.units = Decimal('0')
+				product.current_value_usd = Decimal('0')
+				product.is_active = False
+				metadata = product.metadata if isinstance(product.metadata, dict) else {}
+				metadata['stale_after_normalization'] = True
+				metadata.setdefault('zero_balance_from', timezone.localdate().isoformat())
+				product.metadata = metadata
+				product.save(update_fields=['units', 'current_value_usd', 'is_active', 'metadata', 'updated_at'])
+				updated += 1
+
+			stale_funding_accounts = Account.objects.filter(
+				institution=institution,
+				external_id__startswith='binance:funding:',
+				metadata__source='binance',
+			).exclude(external_id__in=seen_funding_account_external_ids)
+			for account in stale_funding_accounts:
+				account.current_balance = Decimal('0')
+				account.current_balance_usd = Decimal('0')
+				account.is_active = False
+				metadata = account.metadata if isinstance(account.metadata, dict) else {}
+				metadata['stale_after_normalization'] = True
+				metadata.setdefault('zero_balance_from', timezone.localdate().isoformat())
+				account.metadata = metadata
+				account.save(update_fields=['current_balance', 'current_balance_usd', 'is_active', 'metadata', 'updated_at'])
+				updated += 1
+
+		if locked_fetch_ok:
+			stale_locked_products = Product.objects.filter(
+				institution=institution,
+				external_id__startswith='binance:earn_locked:',
+				metadata__source='binance',
+			).exclude(external_id__in=seen_locked_product_external_ids)
+			for product in stale_locked_products:
+				product.units = Decimal('0')
+				product.current_value_usd = Decimal('0')
+				product.is_active = False
+				metadata = product.metadata if isinstance(product.metadata, dict) else {}
+				metadata['stale_after_normalization'] = True
+				metadata.setdefault('zero_balance_from', timezone.localdate().isoformat())
+				product.metadata = metadata
+				product.save(update_fields=['units', 'current_value_usd', 'is_active', 'metadata', 'updated_at'])
+				updated += 1
 
 		job.status = ImportJob.Status.SAVED
 		job.rows_detected = rows

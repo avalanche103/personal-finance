@@ -1057,6 +1057,45 @@ class ImportManualSyncTests(TestCase):
 			{'binance-manual-sync', 'binance-spot-balances', 'binance-earn-funding', 'binance-daily-snapshots', 'recalculate-usd-values'},
 		)
 
+	@patch('apps.imports.services.manual_sync.recalculate_usd_valuations')
+	@patch('apps.imports.services.manual_sync.sync_daily_account_snapshots')
+	@patch('apps.imports.services.manual_sync.sync_earn_and_funding')
+	@patch('apps.imports.services.manual_sync.sync_spot_balances')
+	def test_manual_binance_sync_continues_when_daily_step_fails(self, sync_spot, sync_earn, sync_daily, recalc_usd):
+		from apps.accounts.services.binance import BinanceSyncResult
+		from apps.imports.services.manual_sync import sync_binance_manual
+
+		source = ImportSource.objects.get(code='binance-api')
+		spot_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:spot:partial',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-spot-balances',
+			rows_detected=5,
+		)
+		earn_job = ImportJob.objects.create(
+			source=source,
+			idempotency_key='binance:earn:partial',
+			status=ImportJob.Status.SAVED,
+			file_type='api',
+			parser_name='binance-earn-funding',
+			rows_detected=3,
+		)
+		sync_spot.return_value = BinanceSyncResult(scope='spot-balances', job_id=spot_job.pk, rows_detected=5, records_updated=5)
+		sync_earn.return_value = BinanceSyncResult(scope='earn-funding', job_id=earn_job.pk, rows_detected=3, records_updated=2)
+		sync_daily.side_effect = RuntimeError('Binance API error -1121: Invalid symbol.')
+		recalc_usd.return_value = {'accounts': 2, 'transactions': 0, 'balance_snapshots': 0, 'products': 3}
+
+		result = sync_binance_manual()
+
+		self.assertTrue(result.success)
+		self.assertTrue(result.details.get('partial'))
+		self.assertIn('partially completed', result.message)
+		self.assertIn('daily', result.details['step_failures'])
+		self.assertIn(spot_job.pk, result.job_ids)
+		self.assertIn(earn_job.pk, result.job_ids)
+
 	@patch('apps.imports.services.manual_sync.sync_nbrb_rate_history')
 	def test_manual_nbrb_sync_creates_summary_job_in_recent_jobs(self, sync_history):
 		from apps.imports.services.recent_jobs import recent_import_jobs
