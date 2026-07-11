@@ -215,7 +215,7 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Change %')
 		self.assertContains(response, 'portfolio-chart-panel')
 		self.assertContains(response, 'plotly')
-		self.assertContains(response, 'Last day of previous month')
+		self.assertContains(response, 'Previous month end')
 		self.assertContains(response, 'Portfolio groups')
 		self.assertContains(response, 'period-comparison')
 		self.assertContains(response, 'period-comparison-row-label')
@@ -226,7 +226,7 @@ class DashboardSmokeTests(TestCase):
 		self.assertIn('product_groups', response.context)
 		self.assertIn('historical_reporting', response.context)
 		self.assertEqual(len(response.context['historical_reporting']['period_comparisons']), 3)
-		self.assertContains(response, 'Previous day')
+		self.assertContains(response, 'Previous calendar day')
 
 	def test_portfolio_report_contains_bootstrap_institution(self):
 		response = self.client.get('/portfolio-report/?as_of=2026-05-31')
@@ -302,9 +302,9 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(prev_year_account['change']['baseline_usd'], Decimal('1500'))
 		self.assertEqual(prev_year_account['current_usd'], Decimal('2000'))
 		self.assertEqual(prev_year_account['change']['change_abs'], Decimal('500'))
-		self.assertContains(response, 'Previous day')
-		self.assertContains(response, 'Last day of previous month')
-		self.assertContains(response, 'Last day of previous year')
+		self.assertContains(response, 'Previous calendar day')
+		self.assertContains(response, 'Previous month end')
+		self.assertContains(response, 'Previous year end')
 		self.assertContains(response, 'Portfolio groups')
 
 	def test_period_comparison_breakdown_includes_product_groups(self):
@@ -645,6 +645,54 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(today_value, Decimal('12.50'))
 		self.assertEqual(yesterday_value, Decimal('10.00'))
 
+	def test_account_value_as_of_applies_transactions_after_snapshot(self):
+		usd = Currency.objects.get(code='USD')
+		institution = FinancialInstitution.objects.create(
+			name='Snapshot Delta Bank',
+			slug='snapshot-delta-bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+			base_currency=usd,
+		)
+		account = Account.objects.create(
+			institution=institution,
+			name='Snapshot delta cash',
+			account_type=Account.AccountType.BANK,
+			currency=usd,
+			current_balance=Decimal('115.00'),
+			current_balance_usd=Decimal('115.00'),
+		)
+		BalanceSnapshot.objects.create(
+			institution=institution,
+			account=account,
+			currency=usd,
+			balance=Decimal('100.00'),
+			balance_usd=Decimal('100.00'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 1, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=usd,
+			import_fingerprint='snapshot-delta-deposit',
+			amount=Decimal('25.00'),
+			amount_usd=Decimal('25.00'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 2, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.WITHDRAWAL,
+			currency=usd,
+			import_fingerprint='snapshot-delta-withdrawal',
+			amount=Decimal('-10.00'),
+			amount_usd=Decimal('-10.00'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 3, 12, 0)),
+		)
+
+		cache = PortfolioHistoryCache.build()
+		value = _account_value_as_of(account, date(2026, 6, 3), {}, portfolio_cache=cache)
+
+		self.assertEqual(value, Decimal('115.00'))
+
 	def test_account_balance_as_of_zero_after_stale_normalization(self):
 		usd = Currency.objects.get(code='USD')
 		institution = FinancialInstitution.objects.create(
@@ -841,6 +889,33 @@ class DashboardSmokeTests(TestCase):
 		value = _product_value_as_of(product, date(2026, 6, 10), {}, portfolio_cache=cache)
 
 		self.assertEqual(value, Decimal('100'))
+
+	def test_product_value_as_of_uses_stored_usd_for_market_snapshot(self):
+		usd = Currency.objects.get(code='USD')
+		binance = FinancialInstitution.objects.get(slug='binance')
+		product = Product.objects.create(
+			institution=binance,
+			name='Historical BTC position',
+			product_type=Product.ProductType.CRYPTO,
+			currency=usd,
+			units=Decimal('2'),
+			current_price=Decimal('200'),
+			current_value_usd=Decimal('400'),
+			external_id='TEST-HISTORICAL-BTC',
+		)
+		BalanceSnapshot.objects.create(
+			institution=binance,
+			product=product,
+			currency=usd,
+			balance=Decimal('2'),
+			balance_usd=Decimal('150'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 1, 12, 0)),
+			metadata={'source': 'binance', 'price_usd': '75'},
+		)
+
+		value = _product_value_as_of(product, date(2026, 6, 1), {}, portfolio_cache=PortfolioHistoryCache.build())
+
+		self.assertEqual(value, Decimal('150'))
 
 	def test_balance_snapshot_as_of_uses_local_timezone_for_day_boundary(self):
 		usd = Currency.objects.get(code='USD')

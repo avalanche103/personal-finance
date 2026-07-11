@@ -14,7 +14,7 @@ from apps.accounts.querysets import (
 	is_portfolio_holding_account,
 	visible_account_queryset,
 )
-from apps.accounts.services.balance import calculate_account_balance_as_of
+from apps.accounts.services.balance import calculate_account_balance_as_of, transaction_affects_account_balance
 from apps.common.dates import format_display_date
 from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
@@ -142,6 +142,37 @@ def _latest_balance_snapshot_as_of(
     return None
 
 
+def _end_of_local_day(as_of_date: date):
+    return timezone.make_aware(
+        datetime.combine(as_of_date + timedelta(days=1), time.min),
+        timezone.get_current_timezone(),
+    )
+
+
+def _account_transaction_delta_after_snapshot(
+    account: Account,
+    snapshot: BalanceSnapshot,
+    as_of_date: date,
+) -> Decimal:
+    delta = Decimal('0')
+    for transaction in Transaction.objects.filter(
+        account=account,
+        occurred_at__gt=snapshot.captured_at,
+        occurred_at__lt=_end_of_local_day(as_of_date),
+    ).only('amount', 'metadata'):
+        if transaction_affects_account_balance(transaction):
+            delta += transaction.amount or Decimal('0')
+    return delta
+
+
+def _account_balance_from_snapshot_as_of(
+    account: Account,
+    snapshot: BalanceSnapshot,
+    as_of_date: date,
+) -> Decimal:
+    return snapshot.balance + _account_transaction_delta_after_snapshot(account, snapshot, as_of_date)
+
+
 def _balance_snapshot_as_of(snapshots: list[BalanceSnapshot], as_of_date: date, fallback: Decimal) -> Decimal:
     snapshot = _latest_balance_snapshot_as_of(snapshots, as_of_date)
     return snapshot.balance if snapshot else fallback
@@ -170,7 +201,7 @@ def _account_balance_as_of(
             as_of_date,
         )
         if snapshot:
-            return snapshot.balance
+            return _account_balance_from_snapshot_as_of(account, snapshot, as_of_date)
     else:
         snapshot = (
             account.balance_snapshots.filter(captured_at__date__lte=as_of_date)
@@ -178,7 +209,7 @@ def _account_balance_as_of(
             .first()
         )
         if snapshot:
-            return snapshot.balance
+            return _account_balance_from_snapshot_as_of(account, snapshot, as_of_date)
     return calculate_account_balance_as_of(account, as_of_date)
 
 
@@ -635,9 +666,9 @@ def _build_portfolio_period_comparisons(
     )
     comparisons = []
     for key, label, reference_date in (
-        ('prev_day', 'Previous day', _previous_day(as_of_date)),
-        ('prev_month', 'Last day of previous month', _last_day_of_previous_month(as_of_date)),
-        ('prev_year', 'Last day of previous year', _last_day_of_previous_year(as_of_date)),
+        ('prev_day', 'Previous calendar day', _previous_day(as_of_date)),
+        ('prev_month', 'Previous month end', _last_day_of_previous_month(as_of_date)),
+        ('prev_year', 'Previous year end', _last_day_of_previous_year(as_of_date)),
     ):
         baseline = _historical_portfolio_context(reference_date, portfolio_cache=portfolio_cache)
         baseline_rate_cache: dict[tuple[str, str], Decimal] = {}
@@ -701,6 +732,33 @@ def _product_market_value_native(product: Product, *, units: Decimal) -> Decimal
     return units * (product.current_price or Decimal('0'))
 
 
+def _latest_product_snapshot_as_of(
+    product: Product,
+    as_of_date: date,
+    *,
+    portfolio_cache: PortfolioHistoryCache | None = None,
+) -> BalanceSnapshot | None:
+    if portfolio_cache is not None:
+        return _latest_balance_snapshot_as_of(
+            portfolio_cache.product_snapshots.get(product.id, []),
+            as_of_date,
+        )
+    return (
+        product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
+        .order_by('-captured_at', '-id')
+        .first()
+    )
+
+
+def _stored_market_snapshot_value_usd(snapshot: BalanceSnapshot | None) -> Decimal | None:
+    if snapshot is None:
+        return None
+    metadata = snapshot.metadata if isinstance(snapshot.metadata, dict) else {}
+    if metadata.get('source') == 'binance':
+        return snapshot.balance_usd or Decimal('0')
+    return None
+
+
 def _product_units_from_transactions_as_of(
     product: Product,
     as_of_date,
@@ -731,17 +789,7 @@ def _product_native_units_as_of(
         return Decimal('0')
 
     effective_transaction_map = transaction_map or (portfolio_cache.transaction_map if portfolio_cache else None)
-    if portfolio_cache is not None:
-        snapshot = _latest_balance_snapshot_as_of(
-            portfolio_cache.product_snapshots.get(product.id, []),
-            as_of_date,
-        )
-    else:
-        snapshot = (
-            product.balance_snapshots.filter(captured_at__date__lte=as_of_date)
-            .order_by('-captured_at', '-id')
-            .first()
-        )
+    snapshot = _latest_product_snapshot_as_of(product, as_of_date, portfolio_cache=portfolio_cache)
     if snapshot:
         return snapshot.balance
     units_from_transactions = _product_units_from_transactions_as_of(product, as_of_date, effective_transaction_map)
@@ -769,8 +817,13 @@ def _product_value_as_of(
         )
     else:
         rate = get_usd_conversion_rate(product.currency, as_of_date, rate_cache)
+    today = timezone.localdate()
+    if as_of_date < today:
+        snapshot = _latest_product_snapshot_as_of(product, as_of_date, portfolio_cache=portfolio_cache)
+        stored_market_value_usd = _stored_market_snapshot_value_usd(snapshot)
+        if stored_market_value_usd is not None:
+            return stored_market_value_usd
     if product.product_type in (Product.ProductType.PENSION, Product.ProductType.LIFE_INSURANCE):
-        today = timezone.localdate()
         if as_of_date >= today:
             return product.current_value_usd or Decimal('0')
         stale_zero_date = _stale_zero_local_date(product)
