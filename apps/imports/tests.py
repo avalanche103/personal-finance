@@ -671,6 +671,13 @@ class BnbDepositImportTests(TestCase):
 		self.assertEqual(statement['annual_rate_pct'], '14.91')
 		self.assertEqual(result.metadata['rows'], 1)
 
+	def test_bnb_top_up_is_not_classified_as_interest(self):
+		from apps.common.services.bnb_deposits import _classify_operation
+
+		self.assertEqual(_classify_operation('On-line пополнение по требованию'), 'top_up')
+		self.assertEqual(_classify_operation('Капитализация'), 'capitalization')
+		self.assertEqual(_classify_operation('On-line открытие вклада'), 'opening')
+
 	def test_import_bnb_deposit_pipeline(self):
 		institution = FinancialInstitution.objects.get(slug='bnb-bank')
 		source = ImportSource.objects.get(code='bnb-deposit-statement')
@@ -703,16 +710,24 @@ class BnbDepositImportTests(TestCase):
 			Transaction.objects.filter(
 				product=bnb1,
 				transaction_type=Transaction.TransactionType.DEPOSIT,
+				metadata__operation_kind='opening',
 			).count(),
 			1,
 		)
+		top_ups = Transaction.objects.filter(
+			product=bnb1,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			metadata__operation_kind='top_up',
+		)
+		self.assertEqual(top_ups.count(), 6)
+		self.assertEqual(sum(tx.amount for tx in top_ups), Decimal('65.99'))
 		capitalized = Transaction.objects.filter(
 			product=bnb1,
 			transaction_type=Transaction.TransactionType.INCOME,
-			metadata__interest_mode='capitalized',
+			metadata__operation_kind='capitalization',
 		)
-		self.assertEqual(capitalized.count(), 12)
-		self.assertEqual(sum(tx.amount for tx in capitalized), Decimal('205.50'))
+		self.assertEqual(capitalized.count(), 6)
+		self.assertEqual(sum(tx.amount for tx in capitalized), Decimal('139.51'))
 
 		bnb2 = Product.objects.get(external_id='1112449330000404')
 		self.assertEqual(

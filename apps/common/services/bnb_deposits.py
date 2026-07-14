@@ -85,7 +85,7 @@ def _classify_operation(description: str) -> str:
 	if 'капитализац' in lowered:
 		return 'capitalization'
 	if 'пополнен' in lowered:
-		return 'interest_credit'
+		return 'top_up'
 	return 'other'
 
 
@@ -331,7 +331,23 @@ def persist_bnb_deposit_statement(raw_import_file, result: ParseResult) -> int:
 			kind,
 		)
 
-		if kind == 'opening':
+		if kind in {'opening', 'top_up'}:
+			# Older imports mislabeled top-ups as interest_credit; reclaim that row on re-import.
+			if kind == 'top_up':
+				legacy_fingerprint = _fingerprint(
+					'bnb-deposit',
+					contract_number,
+					row.get('occurred_at', ''),
+					row.get('amount', ''),
+					'interest_credit',
+				)
+				if _has_manual_top_up(product, occurred_at, amount):
+					Transaction.objects.filter(import_fingerprint__in={fingerprint, legacy_fingerprint}).delete()
+					continue
+				Transaction.objects.filter(import_fingerprint=legacy_fingerprint).update(
+					import_fingerprint=fingerprint
+				)
+
 			_, created = Transaction.objects.update_or_create(
 				import_fingerprint=fingerprint,
 				defaults={
@@ -345,7 +361,8 @@ def persist_bnb_deposit_statement(raw_import_file, result: ParseResult) -> int:
 					'quantity': amount,
 					'unit_price': Decimal('1'),
 					'occurred_at': occurred_at,
-					'description': description or f'Открытие вклада {product_name}',
+					'description': description
+					or (f'Открытие вклада {product_name}' if kind == 'opening' else f'Пополнение вклада {product_name}'),
 					'metadata': {
 						'imported_from': 'bnb-deposit-statement',
 						'operation_kind': kind,
@@ -358,7 +375,7 @@ def persist_bnb_deposit_statement(raw_import_file, result: ParseResult) -> int:
 				records_created += 1
 			continue
 
-		if kind in {'capitalization', 'interest_credit'}:
+		if kind == 'capitalization':
 			_, created = Transaction.objects.update_or_create(
 				import_fingerprint=fingerprint,
 				defaults={
@@ -387,3 +404,23 @@ def persist_bnb_deposit_statement(raw_import_file, result: ParseResult) -> int:
 
 	sync_account_balance(byn_account)
 	return records_created
+
+
+def _has_manual_top_up(product: Product, occurred_at, amount: Decimal) -> bool:
+	"""True when the same top-up was already entered manually (cash moved into the deposit)."""
+	target = abs(amount)
+	day = occurred_at.date() if hasattr(occurred_at, 'date') else occurred_at
+	for tx in Transaction.objects.filter(
+		product=product,
+		transaction_type=Transaction.TransactionType.DEPOSIT,
+		occurred_at__date=day,
+	):
+		metadata = tx.metadata if isinstance(tx.metadata, dict) else {}
+		if metadata.get('imported_from') == 'bnb-deposit-statement':
+			continue
+		if metadata.get('operation_kind') != 'top_up':
+			continue
+		quantity = abs(tx.quantity or Decimal('0'))
+		if quantity == target or abs(tx.amount) == target:
+			return True
+	return False
