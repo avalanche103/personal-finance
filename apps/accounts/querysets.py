@@ -18,12 +18,17 @@ def is_portfolio_holding_account(account: Account) -> bool:
 	return True
 
 
-def visible_account_queryset() -> QuerySet[Account]:
+def portfolio_account_queryset() -> QuerySet[Account]:
+	"""Accounts that count toward portfolio holdings (excludes payroll/income sources)."""
 	return (
 		Account.objects.select_related('institution', 'currency')
-		.filter(current_balance_usd__gt=0)
+		.exclude(institution__slug__in=PORTFOLIO_EXCLUDED_INSTITUTION_SLUGS)
 	)
 
 
+def visible_account_queryset() -> QuerySet[Account]:
+	return portfolio_account_queryset().filter(current_balance_usd__gt=0)
+
+
 def portfolio_holding_account_queryset() -> QuerySet[Account]:
-	return visible_account_queryset().exclude(institution__slug__in=PORTFOLIO_EXCLUDED_INSTITUTION_SLUGS)
+	return visible_account_queryset()

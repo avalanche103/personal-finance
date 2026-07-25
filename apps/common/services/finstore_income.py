@@ -25,8 +25,17 @@ def days_in_year(year: int) -> int:
 	return 365
 
 
-def first_holding_date(product: Product) -> date | None:
-	for tx in Transaction.objects.filter(product=product).order_by('occurred_at', 'id'):
+def first_holding_date(
+	product: Product,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> date | None:
+	source = (
+		transactions
+		if transactions is not None
+		else Transaction.objects.filter(product=product).order_by('occurred_at', 'id')
+	)
+	for tx in source:
 		if (tx.quantity or Decimal('0')) > 0:
 			return timezone.localdate(tx.occurred_at)
 	return None
@@ -59,12 +68,17 @@ def finstore_nominal_per_unit(product: Product) -> Decimal:
 	return product.current_price or Decimal('0')
 
 
-def _units_for_accrual_day(product: Product, day: date, *, projection_as_of: date) -> Decimal:
+def _units_for_accrual_day(
+	product: Product,
+	day: date,
+	*,
+	projection_as_of: date,
+	transactions: list[Transaction] | None = None,
+) -> Decimal:
 	from apps.common.services.indexed_bonds import units_held_on_date
 
-	if day <= projection_as_of:
-		return units_held_on_date(product, day)
-	return units_held_on_date(product, projection_as_of)
+	as_of = day if day <= projection_as_of else projection_as_of
+	return units_held_on_date(product, as_of, transactions=transactions)
 
 
 def calculate_finstore_income_for_period(
@@ -73,6 +87,7 @@ def calculate_finstore_income_for_period(
 	period_end: date,
 	*,
 	projection_as_of: date | None = None,
+	transactions: list[Transaction] | None = None,
 ) -> Decimal:
 	"""WhitePaper formula: sum(units_day * nominal * rate / days_in_year)."""
 	if product.annual_rate_pct is None or product.annual_rate_pct <= 0:
@@ -87,7 +102,12 @@ def calculate_finstore_income_for_period(
 	total = Decimal('0')
 	day = period_start
 	while day <= period_end:
-		units = _units_for_accrual_day(product, day, projection_as_of=reference)
+		units = _units_for_accrual_day(
+			product,
+			day,
+			projection_as_of=reference,
+			transactions=transactions,
+		)
 		if units > 0:
 			total += units * nominal * rate / Decimal(days_in_year(day.year))
 		day += timedelta(days=1)
@@ -115,10 +135,11 @@ def estimate_finstore_income_amount(
 	payment_date: date,
 	*,
 	today: date | None = None,
+	transactions: list[Transaction] | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
 	"""Forecast payout on payment_date for the previous calendar month."""
 	reference = today or timezone.localdate()
-	first_hold = first_holding_date(product)
+	first_hold = first_holding_date(product, transactions=transactions)
 	period = finstore_accrual_period_for_payment(payment_date, first_holding_date=first_hold)
 	if period is None:
 		return None, None
@@ -128,6 +149,7 @@ def estimate_finstore_income_amount(
 		period[0],
 		period[1],
 		projection_as_of=reference,
+		transactions=transactions,
 	)
 	if amount_native <= 0:
 		return None, None

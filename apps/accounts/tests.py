@@ -82,6 +82,29 @@ class AccountViewsTests(TestCase):
         self.assertEqual(groups[0]['label'], 'Finstore')
         self.assertEqual(len(groups[0]['accounts']), 2)
 
+    def test_account_list_hides_income_source_accounts(self):
+        income = FinancialInstitution.objects.create(
+            name='Доходы',
+            slug='income-sources',
+            institution_type=FinancialInstitution.InstitutionType.OTHER,
+            metadata={'purpose': 'payroll_source'},
+        )
+        Account.objects.create(
+            institution=income,
+            name='Зарплата',
+            account_type=Account.AccountType.OTHER,
+            currency=self.byn,
+            current_balance=Decimal('5000'),
+            current_balance_usd=Decimal('1550'),
+            metadata={'purpose': 'payroll'},
+        )
+
+        response = self.client.get(reverse('accounts:list'))
+        self.assertEqual(response.status_code, 200)
+        labels = [group['label'] for group in response.context['account_groups']]
+        self.assertNotIn('Доходы', labels)
+        self.assertNotContains(response, 'Зарплата')
+
     def test_account_create_uses_common_ui_not_admin(self):
         response = self.client.post(
             reverse('accounts:create'),

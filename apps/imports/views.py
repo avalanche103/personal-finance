@@ -16,6 +16,7 @@ from apps.imports.services.progress import job_progress
 from apps.imports.services.recent_jobs import recent_import_jobs, recent_import_jobs_queryset
 from apps.common.services.priorlife_insurance import list_priorlife_products
 from apps.accounts.models import Account
+from apps.accounts.querysets import portfolio_account_queryset
 from apps.common.services.cash_operations import CASH_INSTITUTION_SLUG
 
 
@@ -172,9 +173,9 @@ def _cash_manual_context():
         .select_related('currency', 'institution')
         .order_by('name')
     )
-    transfer_accounts = Account.objects.exclude(
+    transfer_accounts = portfolio_account_queryset().exclude(
         institution__slug=CASH_INSTITUTION_SLUG,
-    ).select_related('currency', 'institution').order_by('institution__name', 'name')
+    ).order_by('institution__name', 'name')
     return {
         'cash_form': CashManualOperationForm(cash_accounts, transfer_accounts),
         'cash_accounts': cash_accounts,

@@ -206,7 +206,6 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Finstore')
 		self.assertContains(response, 'Groups')
 		self.assertContains(response, 'All products')
-		self.assertContains(response, 'Period comparison')
 		self.assertContains(response, 'Recent operations')
 		self.assertContains(response, 'Operations calendar')
 		self.assertContains(response, 'portfolio-chart-data')
@@ -215,22 +214,23 @@ class DashboardSmokeTests(TestCase):
 		self.assertContains(response, 'Change %')
 		self.assertContains(response, 'portfolio-chart-panel')
 		self.assertContains(response, 'plotly')
-		self.assertContains(response, 'Previous month end')
-		self.assertContains(response, 'Portfolio groups')
-		self.assertContains(response, 'period-comparison')
-		self.assertContains(response, 'period-comparison-row-label')
-		comparisons = response.context['historical_reporting']['period_comparisons']
-		self.assertIn('breakdown_groups', comparisons[0])
-		self.assertIn('breakdown_products', comparisons[0])
-		self.assertIn('breakdown_accounts', comparisons[0])
+		self.assertContains(response, 'Reporting')
+		self.assertNotContains(response, 'Period comparison')
+		self.assertNotIn('historical_reporting', response.context)
 		self.assertIn('product_groups', response.context)
-		self.assertIn('historical_reporting', response.context)
-		self.assertEqual(len(response.context['historical_reporting']['period_comparisons']), 3)
-		self.assertContains(response, 'Previous calendar day')
 
 	def test_portfolio_report_contains_bootstrap_institution(self):
 		response = self.client.get('/portfolio-report/?as_of=2026-05-31')
 		self.assertContains(response, 'Finstore')
+		self.assertContains(response, 'Period comparison')
+		self.assertContains(response, 'Previous calendar day')
+		self.assertContains(response, 'Previous month end')
+		self.assertContains(response, 'period-comparison')
+		comparisons = response.context['period_comparisons']
+		self.assertEqual(len(comparisons), 3)
+		self.assertIn('breakdown_groups', comparisons[0])
+		self.assertIn('breakdown_products', comparisons[0])
+		self.assertIn('breakdown_accounts', comparisons[0])
 
 	def test_portfolio_report_period_comparison_uses_reference_dates(self):
 		usd = Currency.objects.get(code='USD')
@@ -958,12 +958,26 @@ class DashboardSmokeTests(TestCase):
 		self.assertEqual(yesterday_value, Decimal('178.83'))
 
 	def test_income_sources_excluded_from_portfolio_history(self):
-		from apps.accounts.querysets import is_portfolio_holding_account
+		from apps.accounts.querysets import is_portfolio_holding_account, visible_account_queryset
 
 		income_institution = FinancialInstitution.objects.get(slug='income-sources')
 		payroll_account = Account.objects.filter(institution=income_institution).first()
 		self.assertIsNotNone(payroll_account)
 		self.assertFalse(is_portfolio_holding_account(payroll_account))
+
+		payroll_account.current_balance = Decimal('5000')
+		payroll_account.current_balance_usd = Decimal('1500')
+		payroll_account.save(update_fields=['current_balance', 'current_balance_usd', 'updated_at'])
+
+		self.assertNotIn(payroll_account.pk, visible_account_queryset().values_list('pk', flat=True))
+
+		metrics = _dashboard_metrics()
+		historical = _historical_portfolio_context(timezone.localdate())
+		self.assertLess(abs(metrics['portfolio_usd'] - historical['portfolio_usd']), Decimal('1'))
+
+		response = self.client.get('/')
+		balance_row_names = [row.name for row in response.context['balance_rows']]
+		self.assertNotIn('Зарплата', balance_row_names)
 
 		cache = PortfolioHistoryCache.build()
 		account_institution_slugs = {account.institution.slug for account in cache.accounts}
@@ -1046,6 +1060,32 @@ class DashboardSmokeTests(TestCase):
 
 		self.assertEqual(group['current_usd'], Decimal('1100'))
 		self.assertEqual(group['change']['baseline_usd'], Decimal('980'))
+
+	def test_period_comparison_current_includes_products_beyond_top_twenty(self):
+		"""Truncated report rows must not understate Finstore/crypto group current values."""
+		usd = Currency.objects.get(code='USD')
+		finstore = FinancialInstitution.objects.get(slug='finstore')
+		today = timezone.localdate()
+		for index in range(25):
+			Product.objects.create(
+				institution=finstore,
+				name=f'Tiny token {index}',
+				product_type=Product.ProductType.TOKEN,
+				currency=usd,
+				units=Decimal('1'),
+				current_price=Decimal('10'),
+				current_value_usd=Decimal('10'),
+				external_id=f'tiny-token-{index}',
+				is_active=True,
+			)
+
+		current = _historical_portfolio_context(today)
+		self.assertEqual(len(current['product_rows']), 20)
+
+		comparisons = _build_portfolio_period_comparisons(today, current)
+		prev_day = next(item for item in comparisons if item['key'] == 'prev_day')
+		finstore_row = next(row for row in prev_day['breakdown_groups'] if row['label'] == 'Finstore')
+		self.assertGreaterEqual(finstore_row['current_usd'], Decimal('250'))
 
 
 class DashboardCashFlowTests(TestCase):

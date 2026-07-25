@@ -4,6 +4,7 @@ from django import forms
 from django.utils import timezone
 
 from apps.accounts.models import Account, Transaction
+from apps.accounts.querysets import portfolio_account_queryset
 from apps.products.models import Product
 from apps.common.services.ledger import create_account, create_transaction, update_transaction
 
@@ -111,6 +112,19 @@ class TransactionForm(forms.ModelForm):
 		self.fields['description'].required = False
 		self.fields['metadata'].required = False
 		self.fields['occurred_at'].input_formats = ['%Y-%m-%dT%H:%M']
+		holding_accounts = portfolio_account_queryset().order_by('institution__name', 'name')
+		account_ids = set(holding_accounts.values_list('pk', flat=True))
+		if self.instance and self.instance.pk:
+			if self.instance.account_id:
+				account_ids.add(self.instance.account_id)
+			if self.instance.related_account_id:
+				account_ids.add(self.instance.related_account_id)
+		account_queryset = Account.objects.filter(pk__in=account_ids).select_related('institution', 'currency').order_by(
+			'institution__name',
+			'name',
+		)
+		self.fields['account'].queryset = account_queryset
+		self.fields['related_account'].queryset = account_queryset
 		for field in self.fields.values():
 			field.widget.attrs.setdefault('class', 'form-control')
 

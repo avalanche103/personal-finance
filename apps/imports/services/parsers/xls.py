@@ -5,6 +5,10 @@ import re
 from apps.accounts.models import Account, Transaction
 from apps.common.models import Currency
 from apps.common.services.aigenis_bonds import apply_aigenis_indexed_bond_defaults
+from apps.common.services.aigenis_funding import (
+	is_paritet_funding_source,
+	replace_aigenis_paritet_funding_with_alfabank_transfer,
+)
 from apps.common.services.aigenis_reconciliation import canonical_aigenis_security_name, reconcile_aigenis_products
 from apps.common.services.finstore_operations import is_finstore_redemption_operation
 from apps.products.models import Product
@@ -304,6 +308,33 @@ class XLSImportParser(BaseImportParser):
                         summary['last_operation_at'] = occurred_at
 
             if account is not None and occurred_at and operation_type != 'Входящий':
+                deposit_source = row.get('deposit_source', '') or ''
+                if operation_type == 'Пополнение д.с.' and is_paritet_funding_source(deposit_source):
+                    pending_transactions.append(
+                        {
+                            'row_number': row.get('row_number'),
+                            'fingerprint_suffix': '',
+                            'isin': isin,
+                            'security_name': security_name,
+                            'account': account,
+                            'transaction_type': Transaction.TransactionType.TRANSFER,
+                            'amount': abs(amount_decimal),
+                            'quantity': Decimal('0'),
+                            'unit_price': Decimal('0'),
+                            'occurred_at': occurred_at,
+                            'amount_currency_code': amount_currency_code,
+                            'raw_amount': row.get('amount', ''),
+                            'description': self._build_aigenis_transaction_description(row),
+                            'operation_type': operation_type,
+                            'issuer': row.get('issuer', ''),
+                            'security_type': row.get('security_type', ''),
+                            'deposit_source': deposit_source,
+                            'paritet_funding': True,
+                            'fee_metadata': {},
+                        }
+                    )
+                    continue
+
                 pending_transactions.append(
                     {
                         'row_number': row.get('row_number'),
@@ -402,11 +433,30 @@ class XLSImportParser(BaseImportParser):
                 'raw_amount': transaction_row['raw_amount'],
             }
             metadata.update(transaction_row.get('fee_metadata') or {})
+            fingerprint = (
+                f"aigenis:{raw_import_file.checksum}:{transaction_row['row_number']}"
+                f"{transaction_row.get('fingerprint_suffix', '')}"
+            )
+            if transaction_row.get('paritet_funding'):
+                before_ids = set(
+                    Transaction.objects.filter(import_fingerprint__startswith=fingerprint).values_list('id', flat=True)
+                )
+                created_rows = replace_aigenis_paritet_funding_with_alfabank_transfer(
+                    aigenis_account=transaction_row['account'],
+                    amount=abs(transaction_row['amount']),
+                    occurred_at=transaction_row['occurred_at'],
+                    import_job=raw_import_file.job,
+                    import_fingerprint=fingerprint,
+                    reported_source=transaction_row.get('deposit_source') or 'Паритетбанк',
+                    description=transaction_row['description'],
+                    metadata=metadata,
+                )
+                if any(row.pk not in before_ids for row in created_rows):
+                    transactions_created += len([row for row in created_rows if row.pk not in before_ids])
+                continue
+
             _, was_created = Transaction.objects.update_or_create(
-                import_fingerprint=(
-                    f"aigenis:{raw_import_file.checksum}:{transaction_row['row_number']}"
-                    f"{transaction_row.get('fingerprint_suffix', '')}"
-                ),
+                import_fingerprint=fingerprint,
                 defaults={
                     'account': transaction_row['account'],
                     'product': product_map.get(transaction_row['isin']),

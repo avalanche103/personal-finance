@@ -203,3 +203,44 @@ class OperationsCalendarTests(TestCase):
             for event in group['events']
         ]
         self.assertNotIn('maturity_forecast', kinds)
+
+    def test_monthly_deposit_forecasts_use_opened_at_anchor_day(self):
+        bank = FinancialInstitution.objects.create(
+            name='BNB Calendar Bank',
+            slug='bnb-calendar-bank',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        deposit = Product.objects.create(
+            institution=bank,
+            name='Monthly deposit',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.usd,
+            units=Decimal('1000'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('1000'),
+            annual_rate_pct=Decimal('12'),
+            income_schedule=Product.IncomeSchedule.MONTHLY,
+            maturity_date=date(2027, 1, 3),
+            next_income_date=date(2026, 7, 3),
+            metadata={'opened_at': '2025-12-03', 'interest_mode': 'capitalized'},
+            is_active=True,
+        )
+        Transaction.objects.create(
+            account=self.account,
+            product=deposit,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.usd,
+            amount=Decimal('10'),
+            amount_usd=Decimal('10'),
+            quantity=Decimal('10'),
+            occurred_at=timezone.make_aware(datetime(2026, 7, 3, 12, 0)),
+            metadata={'operation_kind': 'capitalization', 'interest_mode': 'capitalized'},
+        )
+
+        calendar = build_operations_calendar([deposit], today=date(2026, 7, 25), future_days=60)
+        dates = [day['date'] for day in calendar]
+        self.assertEqual(dates, [date(2026, 8, 3), date(2026, 9, 3)])
+        event = calendar[0]['groups'][0]['events'][0]
+        self.assertEqual(event['kind'], 'income_forecast')
+        self.assertEqual(event['product'], deposit)
+        self.assertIsNotNone(event['amount'])

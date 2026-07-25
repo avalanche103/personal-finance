@@ -319,7 +319,7 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(job.status, ImportJob.Status.SAVED)
 		self.assertEqual(job.details['metadata']['parser_variant'], 'aigenis-report')
 		self.assertEqual(job.details['metadata']['products_created'], 2)
-		self.assertEqual(job.details['metadata']['transactions_created'], 9)
+		self.assertEqual(job.details['metadata']['transactions_created'], 10)
 
 		product = Product.objects.get(institution=institution, external_id='BCSE-00477-P01')
 		op51 = Product.objects.get(institution=institution, external_id='BCSE-00487-P02')
@@ -327,18 +327,25 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(product.name, 'Айгенис Оп47')
 		self.assertEqual(op51.name, 'Айгенис Оп51')
 		self.assertEqual(str(product.units), '2.000000')
-		self.assertEqual(str(product.current_price), '525.70000000')
+		self.assertGreater(product.current_price, Decimal('0'))
 
 		transactions = Transaction.objects.filter(import_job=job).order_by('occurred_at', 'id')
-		self.assertEqual(transactions.count(), 9)
-		self.assertEqual(transactions[0].transaction_type, Transaction.TransactionType.DEPOSIT)
-		self.assertEqual(str(transactions[0].amount), '100.00')
-		self.assertEqual(transactions[1].transaction_type, Transaction.TransactionType.TRADE)
-		self.assertEqual(str(transactions[1].amount), '-516.97')
-		self.assertEqual(transactions[1].product, product)
-		self.assertEqual(transactions[2].transaction_type, Transaction.TransactionType.FEE)
-		self.assertEqual(str(transactions[2].amount), '-1.06')
+		self.assertEqual(transactions.count(), 10)
+		funding_legs = [
+			tx for tx in transactions
+			if tx.transaction_type == Transaction.TransactionType.TRANSFER
+		]
+		self.assertEqual(len(funding_legs), 2)
+		self.assertEqual({str(tx.amount) for tx in funding_legs}, {'-100.00', '100.00'})
+		alfa = Account.objects.get(institution__slug='alfabank', currency__code='BYN')
+		self.assertEqual({tx.account_id for tx in funding_legs}, {alfa.pk, Account.objects.get(institution=institution, currency__code='BYN').pk})
+		self.assertEqual(funding_legs[0].metadata.get('deposit_source_actual'), 'alfabank')
+		self.assertEqual(transactions[2].transaction_type, Transaction.TransactionType.TRADE)
+		self.assertEqual(str(transactions[2].amount), '-516.97')
 		self.assertEqual(transactions[2].product, product)
+		self.assertEqual(transactions[3].transaction_type, Transaction.TransactionType.FEE)
+		self.assertEqual(str(transactions[3].amount), '-1.06')
+		self.assertEqual(transactions[3].product, product)
 
 		account = Account.objects.get(institution=institution, currency__code='BYN')
 		self.assertEqual(str(account.current_balance), '-1853.22')

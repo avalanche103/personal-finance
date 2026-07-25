@@ -279,28 +279,34 @@ def estimate_next_income_amount(
 	payment_dates: list[date] | None = None,
 	payment_date: date | None = None,
 	today: date | None = None,
+	transactions: list[Transaction] | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
 	"""Coupon per period. Returns (native, usd)."""
 	from apps.common.services.finstore_income import estimate_finstore_income_amount, is_finstore_token
 	from apps.common.services.indexed_bonds import latest_usd_byn_rate, planned_coupon_usd_per_unit, units_held_on_date
 
-	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product)
+	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product, transactions=transactions)
 	target_date = payment_date or product.next_income_date
 	if target_date is None:
-		target_date = estimate_next_income_date(product, today=today)
+		target_date = estimate_next_income_date(product, today=today, transactions=transactions)
 
 	if is_finstore_token(product) and target_date is not None:
 		finstore_native, finstore_usd = estimate_finstore_income_amount(
 			product,
 			target_date,
 			today=today,
+			transactions=transactions,
 		)
 		if finstore_native is not None:
 			return finstore_native, finstore_usd
 
 	planned_usd = planned_coupon_usd_per_unit(product, target_date)
 	if planned_usd is not None:
-		held_units = units_held_on_date(product, target_date or timezone.localdate())
+		held_units = units_held_on_date(
+			product,
+			target_date or timezone.localdate(),
+			transactions=transactions,
+		)
 		if held_units <= 0:
 			held_units = product.units or Decimal('0')
 		if held_units > 0:
@@ -313,13 +319,22 @@ def estimate_next_income_amount(
 				amount_native = (amount_usd * usd_byn_rate).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
 			return amount_native, amount_usd
 
-	median_native, median_usd = median_recent_income_amount(product, before=target_date)
+	median_native, median_usd = median_recent_income_amount(
+		product,
+		before=target_date,
+		transactions=transactions,
+	)
 	if median_native is not None and target_date is not None:
-		recent_before = recent_income_transactions(product, limit=6, before=target_date)
+		recent_before = recent_income_transactions(
+			product,
+			limit=6,
+			before=target_date,
+			transactions=transactions,
+		)
 		last_payment = timezone.localdate(recent_before[0].occurred_at) if recent_before else None
 		if last_payment is not None:
-			held_at_target = units_held_on_date(product, target_date)
-			held_at_last = units_held_on_date(product, last_payment)
+			held_at_target = units_held_on_date(product, target_date, transactions=transactions)
+			held_at_last = units_held_on_date(product, last_payment, transactions=transactions)
 			if held_at_target > 0 and held_at_last > 0:
 				drift = abs(held_at_target - held_at_last) / held_at_target
 				if drift <= Decimal('0.05'):
@@ -346,7 +361,11 @@ def estimate_next_income_amount(
 	if product.annual_rate_pct is None or product.annual_rate_pct <= 0:
 		return None, None
 
-	held_units = units_held_on_date(product, target_date or timezone.localdate())
+	held_units = units_held_on_date(
+		product,
+		target_date or timezone.localdate(),
+		transactions=transactions,
+	)
 	if held_units <= 0:
 		held_units = product.units or Decimal('0')
 	principal = held_units * (product.current_price or Decimal('0'))
@@ -382,10 +401,12 @@ def estimate_next_income_amount(
 
 
 def is_income_transaction(transaction: Transaction) -> bool:
-	operation_type = ''
-	if isinstance(transaction.metadata, dict):
-		operation_type = transaction.metadata.get('operation_type', '')
+	metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+	operation_type = metadata.get('operation_type', '')
 	if operation_type == FINSTORE_INCOME_OPERATION:
+		return True
+	# Capitalized deposit interest stores quantity for units, but is still an income payment.
+	if metadata.get('operation_kind') == 'capitalization':
 		return True
 	return (
 		transaction.transaction_type == Transaction.TransactionType.INCOME
@@ -393,10 +414,19 @@ def is_income_transaction(transaction: Transaction) -> bool:
 	)
 
 
-def income_payment_dates(product: Product) -> list[date]:
+def income_payment_dates(
+	product: Product,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> list[date]:
 	dates: list[date] = []
 	seen: set[date] = set()
-	for tx in Transaction.objects.filter(product=product).order_by('occurred_at', 'id'):
+	source = (
+		transactions
+		if transactions is not None
+		else Transaction.objects.filter(product=product).order_by('occurred_at', 'id')
+	)
+	for tx in source:
 		if not is_income_transaction(tx):
 			continue
 		payment_date = timezone.localdate(tx.occurred_at)
@@ -406,8 +436,12 @@ def income_payment_dates(product: Product) -> list[date]:
 	return dates
 
 
-def last_income_payment_date(product: Product) -> date | None:
-	dates = income_payment_dates(product)
+def last_income_payment_date(
+	product: Product,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> date | None:
+	dates = income_payment_dates(product, transactions=transactions)
 	return dates[-1] if dates else None
 
 
@@ -437,17 +471,27 @@ def _scale_income_amounts(
 	return native, usd
 
 
-def recent_income_transactions(product: Product, *, limit: int = 6, before: date | None = None) -> list[Transaction]:
-	transactions: list[Transaction] = []
-	for tx in Transaction.objects.filter(product=product).order_by('-occurred_at', '-id'):
+def recent_income_transactions(
+	product: Product,
+	*,
+	limit: int = 6,
+	before: date | None = None,
+	transactions: list[Transaction] | None = None,
+) -> list[Transaction]:
+	selected: list[Transaction] = []
+	if transactions is not None:
+		source = sorted(transactions, key=lambda tx: (tx.occurred_at, tx.id), reverse=True)
+	else:
+		source = Transaction.objects.filter(product=product).order_by('-occurred_at', '-id')
+	for tx in source:
 		if not is_income_transaction(tx):
 			continue
 		if before is not None and timezone.localdate(tx.occurred_at) >= before:
 			continue
-		transactions.append(tx)
-		if len(transactions) >= limit:
+		selected.append(tx)
+		if len(selected) >= limit:
 			break
-	return transactions
+	return selected
 
 
 def median_recent_income_amount(
@@ -455,8 +499,14 @@ def median_recent_income_amount(
 	*,
 	limit: int = 6,
 	before: date | None = None,
+	transactions: list[Transaction] | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
-	recent = recent_income_transactions(product, limit=limit, before=before)
+	recent = recent_income_transactions(
+		product,
+		limit=limit,
+		before=before,
+		transactions=transactions,
+	)
 	if len(recent) < 2:
 		return None, None
 
@@ -533,6 +583,7 @@ def upcoming_token_income_dates(
 	*,
 	reference: date,
 	window_end: date,
+	transactions: list[Transaction] | None = None,
 ) -> list[date]:
 	"""All scheduled token/bond income dates from reference through window_end."""
 	if product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
@@ -540,7 +591,10 @@ def upcoming_token_income_dates(
 			return [product.maturity_date]
 		return []
 
-	if product.product_type == Product.ProductType.DEPOSIT and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+	if product.product_type == Product.ProductType.DEPOSIT and product.income_schedule in {
+		Product.IncomeSchedule.TWICE_MONTHLY,
+		Product.IncomeSchedule.MONTHLY,
+	}:
 		from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
 
 		return upcoming_deposit_income_dates(product, reference=reference, window_end=window_end)
@@ -548,7 +602,7 @@ def upcoming_token_income_dates(
 	dates: list[date] = []
 	cursor = reference
 	for _ in range(48):
-		next_date = estimate_next_income_date(product, today=cursor)
+		next_date = estimate_next_income_date(product, today=cursor, transactions=transactions)
 		if next_date is None or next_date in dates:
 			break
 		if next_date > window_end:
@@ -562,16 +616,24 @@ def upcoming_token_income_dates(
 	return dates
 
 
-def estimate_next_income_date(product: Product, *, today: date | None = None) -> date | None:
+def estimate_next_income_date(
+	product: Product,
+	*,
+	today: date | None = None,
+	transactions: list[Transaction] | None = None,
+) -> date | None:
 	reference = today or timezone.localdate()
-	payment_dates = income_payment_dates(product)
+	payment_dates = income_payment_dates(product, transactions=transactions)
 
 	if product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
 		if product.maturity_date and product.maturity_date >= reference:
 			return product.maturity_date
 		return None
 
-	if product.product_type == Product.ProductType.DEPOSIT and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+	if product.product_type == Product.ProductType.DEPOSIT and product.income_schedule in {
+		Product.IncomeSchedule.TWICE_MONTHLY,
+		Product.IncomeSchedule.MONTHLY,
+	}:
 		from apps.products.services.deposit_schedule import estimate_deposit_next_income_date
 
 		scheduled = estimate_deposit_next_income_date(product, today=reference)

@@ -11,6 +11,7 @@ from apps.products.models import Product
 from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
 from apps.products.services.token_terms import (
     estimate_next_income_amount,
+    income_payment_dates,
     upcoming_token_income_dates,
 )
 
@@ -158,6 +159,7 @@ def build_operations_calendar(
     *,
     today: date | None = None,
     future_days: int = 60,
+    transaction_map: dict[int, list] | None = None,
 ) -> list[dict]:
     """Upcoming operations only; nearest dates first."""
     reference = today or timezone.localdate()
@@ -170,6 +172,10 @@ def build_operations_calendar(
             continue
         if product.product_type not in (Product.ProductType.TOKEN, Product.ProductType.BOND, Product.ProductType.DEPOSIT):
             continue
+
+        product_transactions = None
+        if transaction_map is not None:
+            product_transactions = transaction_map.get(product.id, [])
 
         label = product_group_label(*product_group_key(product))
         maturity_in_window = _maturity_in_window(product, reference=reference, window_end=window_end)
@@ -193,15 +199,22 @@ def build_operations_calendar(
 
         if (
             product.product_type == Product.ProductType.DEPOSIT
-            and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY
+            and product.income_schedule in {
+                Product.IncomeSchedule.TWICE_MONTHLY,
+                Product.IncomeSchedule.MONTHLY,
+            }
         ):
             forecast_dates = upcoming_deposit_income_dates(
                 product,
                 reference=reference,
                 window_end=window_end,
             )
+            amount, amount_usd = estimate_next_income_amount(
+                product,
+                today=reference,
+                transactions=product_transactions,
+            )
             for forecast_date in forecast_dates:
-                amount, amount_usd = estimate_next_income_amount(product)
                 _append_income_event(
                     day_groups,
                     product=product,
@@ -221,12 +234,18 @@ def build_operations_calendar(
             product,
             reference=reference,
             window_end=window_end,
+            transactions=product_transactions,
         )
+        payment_dates = None
+        if product_transactions is not None:
+            payment_dates = income_payment_dates(product, transactions=product_transactions)
         for forecast_date in forecast_dates:
             amount, amount_usd = estimate_next_income_amount(
                 product,
+                payment_dates=payment_dates,
                 payment_date=forecast_date,
                 today=reference,
+                transactions=product_transactions,
             )
             _append_income_event(
                 day_groups,

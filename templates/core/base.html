@@ -29,6 +29,7 @@
                 <a class="nav-link{% if request.path|slice:':10' == '/accounts/' %} is-active{% endif %}" href="{% url 'accounts:list' %}">Accounts</a>
                 <a class="nav-link{% if request.path|slice:':10' == '/products/' %} is-active{% endif %}" href="{% url 'products:list' %}">Products</a>
                 <a class="nav-link{% if request.path|slice:':8' == '/imports/' %} is-active{% endif %}" href="{% url 'imports:upload' %}">Imports</a>
+                <a class="nav-link{% if request.path|slice:':17' == '/portfolio-report' %} is-active{% endif %}" href="{% url 'dashboard:portfolio_report' %}">Reporting</a>
                 <a class="nav-link{% if request.path|slice:':10' == '/settings/' %} is-active{% endif %}" href="{% url 'core:settings' %}">Settings</a>
             </nav>
             <div class="sidebar-note">

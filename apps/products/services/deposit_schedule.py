@@ -32,36 +32,71 @@ def deposit_income_dates_in_month(year: int, month: int, *, day1: int, day2: int
 	return sorted({date(year, month, min(day, last_day)) for day in (day1, day2)})
 
 
+def _monthly_anchor_day(product: Product) -> int | None:
+	opened_at = _parse_opened_at(product)
+	if opened_at is not None:
+		return opened_at.day
+	if product.next_income_date is not None:
+		return product.next_income_date.day
+	return None
+
+
+def _date_on_anchor_day(year: int, month: int, anchor_day: int) -> date:
+	return date(year, month, min(anchor_day, monthrange(year, month)[1]))
+
+
 def upcoming_deposit_income_dates(
 	product: Product,
 	*,
 	reference: date,
 	window_end: date,
 ) -> list[date]:
-	if product.income_schedule != Product.IncomeSchedule.TWICE_MONTHLY:
-		return []
-
 	opened_at = _parse_opened_at(product)
-	if opened_at is None:
-		return []
 
-	day1, day2 = deposit_income_anchor_days(opened_at)
-	dates: list[date] = []
-	year, month = reference.year, reference.month
-	for _ in range(36):
-		for candidate in deposit_income_dates_in_month(year, month, day1=day1, day2=day2):
-			if candidate < opened_at or candidate < reference:
-				continue
-			if product.maturity_date and candidate > product.maturity_date:
-				continue
-			if candidate > window_end:
-				return dates
-			dates.append(candidate)
-		month += 1
-		if month > 12:
-			month = 1
-			year += 1
-	return dates
+	if product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+		if opened_at is None:
+			return []
+		day1, day2 = deposit_income_anchor_days(opened_at)
+		dates: list[date] = []
+		year, month = reference.year, reference.month
+		for _ in range(36):
+			for candidate in deposit_income_dates_in_month(year, month, day1=day1, day2=day2):
+				if candidate < opened_at or candidate < reference:
+					continue
+				if product.maturity_date and candidate > product.maturity_date:
+					continue
+				if candidate > window_end:
+					return dates
+				dates.append(candidate)
+			month += 1
+			if month > 12:
+				month = 1
+				year += 1
+		return dates
+
+	if product.income_schedule == Product.IncomeSchedule.MONTHLY:
+		anchor_day = _monthly_anchor_day(product)
+		if anchor_day is None:
+			return []
+		dates = []
+		year, month = reference.year, reference.month
+		for _ in range(36):
+			candidate = _date_on_anchor_day(year, month, anchor_day)
+			if opened_at is not None and candidate < opened_at:
+				pass
+			elif candidate >= reference:
+				if product.maturity_date and candidate > product.maturity_date:
+					break
+				if candidate > window_end:
+					break
+				dates.append(candidate)
+			month += 1
+			if month > 12:
+				month = 1
+				year += 1
+		return dates
+
+	return []
 
 
 def estimate_deposit_next_income_date(product: Product, *, today: date) -> date | None:

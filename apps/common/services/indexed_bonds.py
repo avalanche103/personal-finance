@@ -372,13 +372,22 @@ def save_income_calendar_config(
 	product.save(update_fields=['metadata', 'updated_at'])
 
 
-def units_held_on_date(product: Product, on_date: date) -> Decimal:
+def units_held_on_date(
+	product: Product,
+	on_date: date,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> Decimal:
 	end_of_day = timezone.make_aware(datetime.combine(on_date, datetime.max.time()))
 	units = Decimal('0')
-	for transaction in (
-		Transaction.objects.filter(product=product, occurred_at__lte=end_of_day)
-		.order_by('occurred_at', 'id')
-	):
+	source = (
+		transactions
+		if transactions is not None
+		else Transaction.objects.filter(product=product, occurred_at__lte=end_of_day).order_by('occurred_at', 'id')
+	)
+	for transaction in source:
+		if transactions is not None and transaction.occurred_at > end_of_day:
+			continue
 		quantity = transaction.quantity or Decimal('0')
 		if quantity != 0:
 			units += quantity
