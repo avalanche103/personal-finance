@@ -9,6 +9,7 @@ from apps.common.models import Currency
 from apps.common.services.finstore_income import (
 	calculate_finstore_income_for_period,
 	estimate_finstore_income_amount,
+	estimate_finstore_redemption_income_amount,
 	finstore_accrual_period_for_payment,
 )
 from apps.institutions.models import FinancialInstitution
@@ -105,3 +106,39 @@ class FinstoreIncomeTests(TestCase):
 
 		amount, _ = estimate_next_income_amount(self.product, payment_date=date(2026, 6, 15))
 		self.assertEqual(amount, Decimal('0.35'))
+
+	def test_early_redemption_includes_unpaid_full_month_and_new_month_days(self):
+		self.product.annual_rate_pct = Decimal('21.00')
+		self.product.units = Decimal('2')
+		self.product.current_price = Decimal('50')
+		self.product.current_value_usd = Decimal('34.66')
+		self.product.maturity_date = date(2026, 8, 3)
+		self.product.save()
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product,
+			currency=self.byn,
+			transaction_type=Transaction.TransactionType.TRADE,
+			amount=Decimal('-100.00'),
+			quantity=Decimal('2'),
+			occurred_at=timezone.make_aware(datetime(2024, 9, 17, 12, 0)),
+			import_fingerprint='finstore-redemption-buy',
+		)
+		Transaction.objects.create(
+			account=self.account,
+			product=self.product,
+			currency=self.byn,
+			transaction_type=Transaction.TransactionType.INCOME,
+			amount=Decimal('1.73'),
+			occurred_at=timezone.make_aware(datetime(2026, 7, 15, 12, 0)),
+			import_fingerprint='finstore-redemption-last-income',
+		)
+
+		amount, amount_usd = estimate_finstore_redemption_income_amount(
+			self.product,
+			date(2026, 8, 3),
+		)
+
+		# Last payment on 15 July settled June: accrue 1 July–3 August (34 days).
+		self.assertEqual(amount, Decimal('1.96'))
+		self.assertEqual(amount_usd, Decimal('0.68'))

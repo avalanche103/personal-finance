@@ -129,9 +129,11 @@ class CashManualOperationForm(forms.Form):
         widget=forms.DateInput(attrs={'type': 'date'}),
     )
     related_account = forms.ModelChoiceField(
-        label='Счёт для перевода',
+        label='Счёт-получатель / счёт-отправитель',
+        help_text='Для «Перевод на счёт» — счёт-получатель. Для «Перевод со счёта» — счёт-отправитель.',
         queryset=Account.objects.none(),
         required=False,
+        empty_label='Выберите счёт для перевода',
     )
     description = forms.CharField(
         label='Комментарий',
@@ -146,12 +148,30 @@ class CashManualOperationForm(forms.Form):
             self.single_cash_account = self.cash_accounts[0]
         else:
             self.fields['cash_account'] = forms.ModelChoiceField(
-                label='Кошелёк',
+                label='Счёт наличных',
+                help_text='Для перевода: отправитель при «Перевод на счёт», получатель при «Перевод со счёта».',
                 queryset=Account.objects.filter(pk__in=[account.pk for account in self.cash_accounts]).select_related('currency'),
             )
             self.single_cash_account = None
         self.transfer_accounts = transfer_accounts
         self.fields['related_account'].queryset = transfer_accounts.select_related('currency', 'institution')
+        operation = None
+        if self.is_bound:
+            operation = self.data.get('operation')
+        elif self.initial:
+            operation = self.initial.get('operation')
+        if operation == 'transfer_out':
+            if 'cash_account' in self.fields:
+                self.fields['cash_account'].label = 'Счёт-отправитель'
+            self.fields['related_account'].label = 'Счёт-получатель'
+            self.fields['related_account'].help_text = 'Куда зачисляются деньги.'
+            self.fields['related_account'].empty_label = 'Выберите счёт-получатель'
+        elif operation == 'transfer_in':
+            if 'cash_account' in self.fields:
+                self.fields['cash_account'].label = 'Счёт-получатель'
+            self.fields['related_account'].label = 'Счёт-отправитель'
+            self.fields['related_account'].help_text = 'Откуда поступают деньги.'
+            self.fields['related_account'].empty_label = 'Выберите счёт-отправитель'
         for field in self.fields.values():
             field.widget.attrs.setdefault('class', 'form-control')
 
@@ -163,13 +183,13 @@ class CashManualOperationForm(forms.Form):
 
         if operation in {'transfer_out', 'transfer_in'}:
             if related_account is None:
-                raise forms.ValidationError('Укажите счёт для перевода.')
+                raise forms.ValidationError('Укажите счёт-получатель или счёт-отправитель для перевода.')
             if cash_account is not None and related_account.pk == cash_account.pk:
-                raise forms.ValidationError('Счёт перевода должен отличаться от кошелька наличных.')
+                raise forms.ValidationError('Счёт-получатель и счёт-отправитель должны отличаться.')
             if cash_account is not None and related_account.currency_id != cash_account.currency_id:
-                raise forms.ValidationError('Для перевода валюта счёта должна совпадать с кошельком наличных.')
+                raise forms.ValidationError('Счёт-отправитель и счёт-получатель должны быть в одной валюте.')
         elif related_account is not None:
-            self.add_error('related_account', 'Счёт нужен только для переводов.')
+            self.add_error('related_account', 'Счёт для перевода нужен только при переводе.')
 
         cleaned_data['cash_account'] = cash_account
         return cleaned_data

@@ -56,6 +56,14 @@ class TransactionForm(forms.ModelForm):
 			'description',
 			'metadata',
 		)
+		labels = {
+			'account': 'Счёт-отправитель',
+			'related_account': 'Счёт-получатель',
+		}
+		help_texts = {
+			'account': 'Для перевода — откуда уходят деньги. Для остальных операций — счёт операции.',
+			'related_account': 'Только для перевода: куда зачисляются деньги.',
+		}
 		widgets = {
 			'occurred_at': forms.DateTimeInput(
 				format='%Y-%m-%dT%H:%M',
@@ -86,19 +94,31 @@ class TransactionForm(forms.ModelForm):
 			elif amount in (None, '') or amount == 0:
 				self.add_error('amount', 'Deposit amount must be non-zero.')
 
+		if (
+			transaction_type == Transaction.TransactionType.WITHDRAWAL
+			and product is not None
+			and product.product_type == Product.ProductType.DEPOSIT
+		):
+			if product.income_account_id is None:
+				self.add_error('product', 'This deposit product has no linked income account.')
+			elif account is not None and account.pk != product.income_account_id:
+				self.add_error('account', 'Record the deposit redemption on the linked income account for this product.')
+			elif amount in (None, '') or amount == 0:
+				self.add_error('amount', 'Deposit redemption amount must be non-zero.')
+
 		if transaction_type == Transaction.TransactionType.TRANSFER:
 			if related_account is None:
-				self.add_error('related_account', 'Select the destination account for a transfer.')
+				self.add_error('related_account', 'Укажите счёт-получатель для перевода.')
 			elif account is not None and related_account.pk == account.pk:
-				self.add_error('related_account', 'Transfer destination must be different from the source account.')
+				self.add_error('related_account', 'Счёт-получатель должен отличаться от счёта-отправителя.')
 			elif account is not None and related_account.currency_id != account.currency_id:
-				self.add_error('related_account', 'Transfer accounts must use the same currency.')
+				self.add_error('related_account', 'Счёт-отправитель и счёт-получатель должны быть в одной валюте.')
 			elif currency is not None and account is not None and currency.pk != account.currency_id:
-				self.add_error('currency', 'Transfer currency must match the source account currency.')
+				self.add_error('currency', 'Валюта перевода должна совпадать со счётом-отправителем.')
 			elif amount in (None, '') or amount == 0:
-				self.add_error('amount', 'Transfer amount must be non-zero.')
+				self.add_error('amount', 'Сумма перевода должна быть ненулевой.')
 		elif related_account is not None:
-			self.add_error('related_account', 'Related account is only used for transfers.')
+			self.add_error('related_account', 'Счёт-получатель используется только для переводов.')
 
 		return cleaned_data
 
@@ -125,6 +145,11 @@ class TransactionForm(forms.ModelForm):
 		)
 		self.fields['account'].queryset = account_queryset
 		self.fields['related_account'].queryset = account_queryset
+		self.fields['account'].empty_label = 'Выберите счёт-отправитель'
+		self.fields['related_account'].empty_label = 'Выберите счёт-получатель'
+		self.fields['amount'].help_text = (
+			'Для Withdrawal можно указать 100 — сумма сохранится как −100.'
+		)
 		for field in self.fields.values():
 			field.widget.attrs.setdefault('class', 'form-control')
 

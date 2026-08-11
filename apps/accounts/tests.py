@@ -209,6 +209,170 @@ class AccountViewsTests(TestCase):
         self.assertEqual(income_account.current_balance, Decimal('0'))
         self.assertEqual(deposit.units, Decimal('1126.11'))
 
+    def test_capitalized_deposit_income_gets_capitalization_description(self):
+        bank = FinancialInstitution.objects.create(
+            name='BNB Cap Bank',
+            slug='bnb-cap-bank-test',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        income_account = Account.objects.create(
+            institution=bank,
+            name='BNB Cap BYN',
+            account_type=Account.AccountType.BANK,
+            currency=self.byn,
+            current_balance=Decimal('0'),
+            current_balance_usd=Decimal('0'),
+        )
+        deposit = Product.objects.create(
+            institution=bank,
+            income_account=income_account,
+            name='BNB Cap Deposit',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.byn,
+            units=Decimal('1000'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('310'),
+            external_id='test-bnb-cap',
+            metadata={'interest_mode': 'capitalized'},
+        )
+
+        response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': income_account.pk,
+                'related_account': '',
+                'product': deposit.pk,
+                'transaction_type': Transaction.TransactionType.INCOME,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '14.19',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-07-29T09:00',
+                'description': '',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        ledger_transaction = Transaction.objects.get(product=deposit, transaction_type=Transaction.TransactionType.INCOME)
+        self.assertEqual(ledger_transaction.description, 'Капитализация')
+        self.assertEqual(ledger_transaction.metadata.get('operation_kind'), 'capitalization')
+        self.assertTrue(ledger_transaction.metadata.get('exclude_from_account_balance'))
+        self.assertEqual(ledger_transaction.quantity, Decimal('14.19'))
+        deposit.refresh_from_db()
+        self.assertEqual(deposit.units, Decimal('14.19'))
+        income_account.refresh_from_db()
+        self.assertEqual(income_account.current_balance, Decimal('0'))
+
+    def test_withdrawal_positive_amount_is_stored_as_negative(self):
+        account = Account.objects.get(name='Checking')
+        response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': account.pk,
+                'related_account': '',
+                'product': '',
+                'transaction_type': Transaction.TransactionType.WITHDRAWAL,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '25.00',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-12T12:00',
+                'description': 'Gift outflow',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        ledger_transaction = Transaction.objects.get(description='Gift outflow')
+        self.assertEqual(ledger_transaction.amount, Decimal('-25.00'))
+        self.assertEqual(ledger_transaction.amount_usd, Decimal('-7.75'))
+        account.refresh_from_db()
+        self.assertEqual(account.current_balance, Decimal('-25.00'))
+
+    def test_deposit_maturity_withdrawal_credits_income_account_and_closes_product(self):
+        bank = FinancialInstitution.objects.create(
+            name='Alfa Maturity Bank',
+            slug='alfa-maturity-bank-test',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        income_account = Account.objects.create(
+            institution=bank,
+            name='Alfa Maturity BYN',
+            account_type=Account.AccountType.BANK,
+            currency=self.byn,
+            current_balance=Decimal('0'),
+            current_balance_usd=Decimal('0'),
+        )
+        deposit = Product.objects.create(
+            institution=bank,
+            income_account=income_account,
+            name='ALFA3 Maturity Test',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.byn,
+            units=Decimal('530.95'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('164.59'),
+            external_id='ALFA3-MATURITY-TEST',
+            metadata={'interest_mode': 'payout'},
+        )
+        Transaction.objects.create(
+            account=income_account,
+            product=deposit,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=self.byn,
+            amount=Decimal('530.95'),
+            amount_usd=Decimal('164.59'),
+            quantity=Decimal('530.95'),
+            unit_price=Decimal('1'),
+            import_fingerprint='alfa3-maturity-opening',
+            occurred_at=timezone.make_aware(timezone.datetime(2025, 2, 11, 12, 0)),
+            description='Opening',
+            metadata={'operation_kind': 'opening', 'exclude_from_account_balance': True},
+        )
+
+        response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': income_account.pk,
+                'related_account': '',
+                'product': deposit.pk,
+                'transaction_type': Transaction.TransactionType.WITHDRAWAL,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '530.95',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-08-11T12:00',
+                'description': '',
+                'metadata': '{}',
+            },
+        )
+
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        ledger_transaction = Transaction.objects.get(
+            product=deposit,
+            transaction_type=Transaction.TransactionType.WITHDRAWAL,
+        )
+        self.assertEqual(ledger_transaction.amount, Decimal('530.95'))
+        self.assertEqual(ledger_transaction.quantity, Decimal('-530.95'))
+        self.assertEqual(ledger_transaction.metadata.get('operation_kind'), 'maturity')
+        self.assertEqual(ledger_transaction.description, 'Погашение депозита ALFA3 Maturity Test')
+        income_account.refresh_from_db()
+        deposit.refresh_from_db()
+        self.assertEqual(income_account.current_balance, Decimal('530.95'))
+        self.assertEqual(deposit.units, Decimal('0'))
+        self.assertFalse(deposit.is_active)
+
+    def test_transaction_form_labels_sender_and_recipient_accounts(self):
+        response = self.client.get(reverse('accounts:transaction_create'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Счёт-отправитель')
+        self.assertContains(response, 'Счёт-получатель')
+        self.assertContains(response, 'Только для перевода: куда зачисляются деньги.')
+
     def test_transfer_create_posts_outgoing_and_incoming_legs(self):
         source = Account.objects.get(name='Checking')
         destination = Account.objects.create(

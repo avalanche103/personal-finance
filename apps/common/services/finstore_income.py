@@ -155,3 +155,66 @@ def estimate_finstore_income_amount(
 		return None, None
 
 	return amount_native, _native_to_usd(product, amount_native)
+
+
+def _latest_finstore_income_payment_date(
+	transactions: list[Transaction],
+	*,
+	on_or_before: date,
+) -> date | None:
+	latest = None
+	for ledger_transaction in transactions:
+		if ledger_transaction.transaction_type != Transaction.TransactionType.INCOME:
+			continue
+		payment_date = timezone.localdate(ledger_transaction.occurred_at)
+		if payment_date <= on_or_before and (latest is None or payment_date > latest):
+			latest = payment_date
+	return latest
+
+
+def estimate_finstore_redemption_income_amount(
+	product: Product,
+	redemption_date: date,
+	*,
+	transactions: list[Transaction] | None = None,
+	scheduled_payment_dates: list[date] | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
+	"""Accrued income not yet paid when a Finstore token is redeemed."""
+	if not is_finstore_token(product):
+		return None, None
+	source = (
+		transactions
+		if transactions is not None
+		else list(Transaction.objects.filter(product=product).order_by('occurred_at', 'id'))
+	)
+	first_hold = first_holding_date(product, transactions=source)
+	if first_hold is None or first_hold > redemption_date:
+		return None, None
+
+	last_payment = _latest_finstore_income_payment_date(source, on_or_before=redemption_date)
+	if last_payment is not None:
+		# A payment in a calendar month settles the preceding calendar month.
+		period_start = last_payment.replace(day=1)
+	else:
+		period_start = first_hold
+
+	# Any regular forecast before redemption settles another full prior month.
+	for payment_date in sorted(scheduled_payment_dates or []):
+		if payment_date <= redemption_date:
+			period_start = payment_date.replace(day=1)
+
+	if period_start < first_hold:
+		period_start = first_hold
+	if period_start > redemption_date:
+		return None, None
+
+	amount_native = calculate_finstore_income_for_period(
+		product,
+		period_start,
+		redemption_date,
+		projection_as_of=redemption_date,
+		transactions=source,
+	)
+	if amount_native <= 0:
+		return None, None
+	return amount_native, _native_to_usd(product, amount_native)

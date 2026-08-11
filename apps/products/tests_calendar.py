@@ -244,3 +244,251 @@ class OperationsCalendarTests(TestCase):
         self.assertEqual(event['kind'], 'income_forecast')
         self.assertEqual(event['product'], deposit)
         self.assertIsNotNone(event['amount'])
+
+    def test_bnb_monthly_forecast_matches_actual_day_count_and_skips_paid_today(self):
+        bank = FinancialInstitution.objects.create(
+            name='BNB Forecast Bank',
+            slug='bnb-forecast-bank',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        deposit = Product.objects.create(
+            institution=bank,
+            name='BNB2 forecast',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.usd,
+            units=Decimal('1203'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('1203'),
+            annual_rate_pct=Decimal('14.91'),
+            income_schedule=Product.IncomeSchedule.MONTHLY,
+            maturity_date=date(2029, 6, 29),
+            next_income_date=date(2026, 6, 29),
+            metadata={
+                'opened_at': '2026-05-29',
+                'interest_mode': 'capitalized',
+                'income_day_count_basis': 365,
+            },
+            is_active=True,
+        )
+        for occurred_at, tx_type, amount, quantity, kind in (
+            (datetime(2026, 5, 29, 12, 0), Transaction.TransactionType.DEPOSIT, Decimal('1115.04'), Decimal('1115.04'), 'opening'),
+            (datetime(2026, 6, 11, 12, 0), Transaction.TransactionType.DEPOSIT, Decimal('11.07'), Decimal('11.07'), 'top_up'),
+            (datetime(2026, 6, 12, 12, 0), Transaction.TransactionType.DEPOSIT, Decimal('3.49'), Decimal('3.49'), 'top_up'),
+            (datetime(2026, 6, 25, 12, 0), Transaction.TransactionType.DEPOSIT, Decimal('11.07'), Decimal('11.07'), 'top_up'),
+            (datetime(2026, 6, 28, 12, 0), Transaction.TransactionType.DEPOSIT, Decimal('3.27'), Decimal('3.27'), 'top_up'),
+            (datetime(2026, 6, 29, 12, 0), Transaction.TransactionType.INCOME, Decimal('14.28'), Decimal('14.28'), 'capitalization'),
+            (datetime(2026, 7, 14, 12, 0), Transaction.TransactionType.DEPOSIT, Decimal('14.78'), Decimal('14.78'), 'top_up'),
+        ):
+            Transaction.objects.create(
+                account=self.account,
+                product=deposit,
+                transaction_type=tx_type,
+                currency=self.usd,
+                amount=amount,
+                amount_usd=amount,
+                quantity=quantity,
+                occurred_at=timezone.make_aware(occurred_at),
+                import_fingerprint=f'bnb-forecast-{occurred_at.date()}-{kind}',
+                metadata={
+                    'operation_kind': kind,
+                    'interest_mode': 'capitalized',
+                    'exclude_from_account_balance': True,
+                },
+            )
+
+        morning = build_operations_calendar([deposit], today=date(2026, 7, 29), future_days=60)
+        self.assertEqual(morning[0]['date'], date(2026, 7, 29))
+        self.assertEqual(morning[0]['groups'][0]['events'][0]['amount'], Decimal('14.19'))
+
+        Transaction.objects.create(
+            account=self.account,
+            product=deposit,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.usd,
+            amount=Decimal('14.19'),
+            amount_usd=Decimal('14.19'),
+            quantity=Decimal('14.19'),
+            occurred_at=timezone.make_aware(datetime(2026, 7, 29, 9, 0)),
+            import_fingerprint='bnb-forecast-2026-07-29-capitalization',
+            metadata={
+                'operation_kind': 'capitalization',
+                'interest_mode': 'capitalized',
+                'exclude_from_account_balance': True,
+            },
+        )
+        Transaction.objects.create(
+            account=self.account,
+            product=deposit,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=self.usd,
+            amount=Decimal('15.81'),
+            amount_usd=Decimal('15.81'),
+            quantity=Decimal('15.81'),
+            occurred_at=timezone.make_aware(datetime(2026, 7, 29, 10, 0)),
+            import_fingerprint='bnb-forecast-2026-07-29-top-up',
+            metadata={
+                'operation_kind': 'top_up',
+                'interest_mode': 'capitalized',
+                'exclude_from_account_balance': True,
+            },
+        )
+
+        after_fact = build_operations_calendar([deposit], today=date(2026, 7, 29), future_days=60)
+        self.assertEqual([day['date'] for day in after_fact], [date(2026, 8, 29)])
+        self.assertNotEqual(after_fact[0]['groups'][0]['events'][0]['amount'], Decimal('14.95'))
+
+    def test_alfabank_forecasts_use_actual_days_and_following_weekday(self):
+        alfabank = FinancialInstitution.objects.create(
+            name='Alfa Bank Calendar',
+            slug='alfabank',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        specs = (
+            ('ALFA1', Decimal('1086.02'), Decimal('16.00'), date(2026, 7, 10), date(2026, 7, 27), Decimal('8.09')),
+            ('ALFA2', Decimal('616.75'), Decimal('15.50'), date(2026, 7, 10), date(2026, 7, 27), Decimal('4.45')),
+            ('ALFA3', Decimal('530.95'), Decimal('15.00'), date(2026, 7, 13), date(2026, 7, 28), Decimal('3.27')),
+        )
+        products = []
+        for name, balance, rate, last_payment, _, _ in specs:
+            product = Product.objects.create(
+                institution=alfabank,
+                name=name,
+                product_type=Product.ProductType.DEPOSIT,
+                currency=self.usd,
+                units=balance,
+                current_price=Decimal('1'),
+                current_value_usd=balance,
+                annual_rate_pct=rate,
+                income_schedule=Product.IncomeSchedule.TWICE_MONTHLY,
+                maturity_date=date(2026, 10, 10),
+                metadata={
+                    'opened_at': '2025-04-10',
+                    'interest_mode': 'payout',
+                    'income_interval_days': 15,
+                    'income_day_count_basis': 365,
+                    'income_date_adjustment': 'following_weekday',
+                },
+                is_active=True,
+            )
+            Transaction.objects.create(
+                account=self.account,
+                product=product,
+                transaction_type=Transaction.TransactionType.INCOME,
+                currency=self.usd,
+                amount=Decimal('1'),
+                amount_usd=Decimal('1'),
+                occurred_at=timezone.make_aware(datetime.combine(last_payment, datetime.min.time())),
+                import_fingerprint=f'calendar-{name}-last-income',
+            )
+            products.append(product)
+
+        calendar = build_operations_calendar(products, today=date(2026, 7, 25), future_days=10)
+        actual = {
+            event['product_name']: (day['date'], event['amount'])
+            for day in calendar
+            for group in day['groups']
+            for event in group['events']
+            if event['kind'] == 'income_forecast'
+        }
+
+        expected = {
+            name: (payment_date, amount)
+            for name, _, _, _, payment_date, amount in specs
+        }
+        self.assertEqual(actual, expected)
+
+    def test_finstore_early_redemption_includes_accrued_income(self):
+        finstore = FinancialInstitution.objects.create(
+            name='Finstore Redemption',
+            slug='finstore',
+            institution_type=FinancialInstitution.InstitutionType.BROKER,
+        )
+        product = Product.objects.create(
+            institution=finstore,
+            name='LIGHTLEASING_(BYN_628)',
+            product_type=Product.ProductType.TOKEN,
+            currency=self.usd,
+            units=Decimal('2'),
+            current_price=Decimal('50'),
+            current_value_usd=Decimal('100'),
+            annual_rate_pct=Decimal('21'),
+            income_schedule=Product.IncomeSchedule.MONTHLY,
+            next_income_date=date(2026, 8, 15),
+            maturity_date=date(2026, 8, 3),
+            is_active=True,
+        )
+        Transaction.objects.create(
+            account=self.account,
+            product=product,
+            transaction_type=Transaction.TransactionType.TRADE,
+            currency=self.usd,
+            amount=Decimal('-100'),
+            quantity=Decimal('2'),
+            occurred_at=timezone.make_aware(datetime(2024, 9, 17, 12, 0)),
+            import_fingerprint='calendar-finstore-redemption-buy',
+        )
+        Transaction.objects.create(
+            account=self.account,
+            product=product,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.usd,
+            amount=Decimal('1.73'),
+            occurred_at=timezone.make_aware(datetime(2026, 7, 15, 12, 0)),
+            import_fingerprint='calendar-finstore-redemption-income',
+        )
+
+        calendar = build_operations_calendar([product], today=date(2026, 7, 25), future_days=30)
+
+        self.assertEqual([day['date'] for day in calendar], [date(2026, 8, 3)])
+        group = calendar[0]['groups'][0]
+        self.assertEqual(
+            [(event['kind'], event['amount']) for event in group['events']],
+            [('maturity_forecast', Decimal('100.00')), ('income_forecast', Decimal('1.96'))],
+        )
+        self.assertEqual(group['total_amount'], Decimal('101.96'))
+
+    def test_alfabank_maturity_includes_interest_after_last_forecast_payment(self):
+        alfabank = FinancialInstitution.objects.create(
+            name='Alfa Bank Maturity',
+            slug='alfabank-maturity',
+            institution_type=FinancialInstitution.InstitutionType.BANK,
+        )
+        product = Product.objects.create(
+            institution=alfabank,
+            name='ALFA3',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.usd,
+            units=Decimal('530.95'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('530.95'),
+            annual_rate_pct=Decimal('15'),
+            income_schedule=Product.IncomeSchedule.TWICE_MONTHLY,
+            maturity_date=date(2026, 8, 11),
+            metadata={
+                'opened_at': '2025-02-11',
+                'interest_mode': 'payout',
+                'income_interval_days': 15,
+                'income_day_count_basis': 365,
+                'income_date_adjustment': 'following_weekday',
+            },
+            is_active=True,
+        )
+        Transaction.objects.create(
+            account=self.account,
+            product=product,
+            transaction_type=Transaction.TransactionType.INCOME,
+            currency=self.usd,
+            amount=Decimal('3.71'),
+            occurred_at=timezone.make_aware(datetime(2026, 7, 13, 12, 0)),
+            import_fingerprint='calendar-alfa3-maturity-last-income',
+        )
+
+        calendar = build_operations_calendar([product], today=date(2026, 7, 25), future_days=20)
+        maturity_day = next(day for day in calendar if day['date'] == date(2026, 8, 11))
+        group = maturity_day['groups'][0]
+
+        self.assertEqual(
+            [(event['kind'], event['amount']) for event in group['events']],
+            [('maturity_forecast', Decimal('530.95')), ('income_forecast', Decimal('3.05'))],
+        )
+        self.assertEqual(group['total_amount'], Decimal('534.00'))

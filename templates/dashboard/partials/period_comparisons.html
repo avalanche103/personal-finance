@@ -9,6 +9,16 @@
                 <div class="period-comparison-summary-metrics text-right">
                     <div class="muted">Baseline ${{ comparison.portfolio.baseline_usd|floatformat:2 }}</div>
                     <div>{% include 'dashboard/partials/value_change.html' with change=comparison.portfolio only %}</div>
+                    <div class="muted">
+                        Own
+                        {% if comparison.portfolio.organic_change_usd > 0 %}
+                            <span class="delta-up">+${{ comparison.portfolio.organic_change_usd|floatformat:2 }}</span>
+                        {% elif comparison.portfolio.organic_change_usd < 0 %}
+                            <span class="delta-down">${{ comparison.portfolio.organic_change_usd|floatformat:2 }}</span>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </div>
                     <div class="muted period-comparison-split">
                         <span>Accounts</span>
                         <span>{% include 'dashboard/partials/value_change.html' with change=comparison.accounts only %}</span>
@@ -20,8 +30,54 @@
 
             <div class="period-comparison-details stack-md">
                 <section class="period-comparison-section">
+                    <h3 class="eyebrow">Change analysis</h3>
+                    <div class="period-attribution-grid">
+                        <article class="period-attribution-card">
+                            <strong>Portfolio</strong>
+                            <div><span class="muted">Added</span><span>${{ comparison.portfolio.contributions_usd|floatformat:2 }}</span></div>
+                            <div><span class="muted">Withdrawn</span><span>${{ comparison.portfolio.withdrawals_usd|floatformat:2 }}</span></div>
+                            <div>
+                                <span class="muted">Own result</span>
+                                <span class="{% if comparison.portfolio.organic_change_usd > 0 %}delta-up{% elif comparison.portfolio.organic_change_usd < 0 %}delta-down{% endif %}">
+                                    ${{ comparison.portfolio.organic_change_usd|floatformat:2 }}
+                                </span>
+                            </div>
+                        </article>
+                        <article class="period-attribution-card">
+                            <strong>Accounts</strong>
+                            <div><span class="muted">Added</span><span>${{ comparison.accounts.contributions_usd|floatformat:2 }}</span></div>
+                            <div><span class="muted">Withdrawn</span><span>${{ comparison.accounts.withdrawals_usd|floatformat:2 }}</span></div>
+                            <div>
+                                <span class="muted">Own result</span>
+                                <span class="{% if comparison.accounts.organic_change_usd > 0 %}delta-up{% elif comparison.accounts.organic_change_usd < 0 %}delta-down{% endif %}">
+                                    ${{ comparison.accounts.organic_change_usd|floatformat:2 }}
+                                </span>
+                            </div>
+                        </article>
+                        <article class="period-attribution-card">
+                            <strong>Products</strong>
+                            <div><span class="muted">Added</span><span>${{ comparison.products.contributions_usd|floatformat:2 }}</span></div>
+                            <div><span class="muted">Withdrawn</span><span>${{ comparison.products.withdrawals_usd|floatformat:2 }}</span></div>
+                            <div>
+                                <span class="muted">Own result</span>
+                                <span class="{% if comparison.products.organic_change_usd > 0 %}delta-up{% elif comparison.products.organic_change_usd < 0 %}delta-down{% endif %}">
+                                    ${{ comparison.products.organic_change_usd|floatformat:2 }}
+                                </span>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+                <section class="period-comparison-section">
                     <h3 class="eyebrow">Portfolio groups</h3>
                     {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_groups show_currency=False empty_label='No portfolio groups in this comparison.' only %}
+                </section>
+                <section class="period-comparison-section">
+                    <h3 class="eyebrow">Products</h3>
+                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_product_entities show_currency=True empty_label='No products in this comparison.' only %}
+                </section>
+                <section class="period-comparison-section">
+                    <h3 class="eyebrow">Accounts</h3>
+                    {% include 'dashboard/partials/period_comparison_breakdown.html' with rows=comparison.breakdown_account_entities show_currency=True empty_label='No accounts in this comparison.' only %}
                 </section>
             </div>
         </details>

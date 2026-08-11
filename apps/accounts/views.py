@@ -32,6 +32,12 @@ def _decorate_transactions(transactions):
         source_label, source_detail = _transaction_source(ledger_transaction)
         ledger_transaction.source_label = source_label
         ledger_transaction.source_detail = source_detail
+        metadata = ledger_transaction.metadata if isinstance(ledger_transaction.metadata, dict) else {}
+        if (
+            not (ledger_transaction.description or '').strip()
+            and metadata.get('operation_kind') == 'capitalization'
+        ):
+            ledger_transaction.description = 'Капитализация'
     return transactions
 
 

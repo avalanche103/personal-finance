@@ -13,11 +13,33 @@ from apps.products.models import Product
 
 TRANSFER_PAIR_METADATA_KEY = 'transfer_pair_id'
 TRANSFER_LEG_METADATA_KEY = 'transfer_leg'
+CAPITALIZATION_DESCRIPTION = 'Капитализация'
 
 
 def _amount_to_usd(currency, amount: Decimal, as_of_date) -> Decimal:
 	rate = get_usd_conversion_rate(currency, as_of_date)
 	return ((amount or Decimal('0')) * rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def _normalize_transaction_amount_sign(
+	transaction_type: str,
+	amount: Decimal,
+	*,
+	product: Product | None = None,
+) -> Decimal:
+	"""Withdrawals reduce cash; accept a positive magnitude from the manual form.
+
+	Deposit-product withdrawals are the opposite: principal returns to the income
+	account, so the stored amount stays positive.
+	"""
+	amount = amount or Decimal('0')
+	if (
+		transaction_type == Transaction.TransactionType.WITHDRAWAL
+		and amount > 0
+		and (product is None or product.product_type != Product.ProductType.DEPOSIT)
+	):
+		return -amount
+	return amount
 
 
 def _is_capitalized_deposit_income(product: Product, metadata: dict) -> bool:
@@ -59,6 +81,19 @@ def _normalize_deposit_product_transaction(
 			metadata.setdefault('interest_mode', product_metadata['interest_mode'])
 		return -magnitude, quantity, metadata
 
+	if transaction_type == Transaction.TransactionType.WITHDRAWAL:
+		magnitude = abs(amount or Decimal('0'))
+		if magnitude <= 0:
+			raise ValueError('Deposit withdrawal amount must be non-zero.')
+		if product.income_account_id and account.pk != product.income_account_id:
+			raise ValueError('Deposit withdrawal must be recorded on the linked income account for this product.')
+		quantity = -magnitude if not quantity else -abs(quantity)
+		metadata.setdefault('operation_kind', 'maturity')
+		product_metadata = product.metadata if isinstance(product.metadata, dict) else {}
+		if product_metadata.get('interest_mode'):
+			metadata.setdefault('interest_mode', product_metadata['interest_mode'])
+		return magnitude, quantity, metadata
+
 	if transaction_type == Transaction.TransactionType.INCOME and _is_capitalized_deposit_income(product, metadata):
 		magnitude = abs(amount or Decimal('0'))
 		if magnitude <= 0:
@@ -72,6 +107,29 @@ def _normalize_deposit_product_transaction(
 		return magnitude, quantity, metadata
 
 	return amount, quantity, metadata
+
+
+def _description_for_deposit_transaction(
+	*,
+	product: Product | None,
+	transaction_type: str,
+	description: str,
+	metadata: dict | None,
+) -> str:
+	description = (description or '').strip()
+	if description:
+		return description
+	if product is None or product.product_type != Product.ProductType.DEPOSIT:
+		return ''
+	meta = metadata if isinstance(metadata, dict) else {}
+	if (
+		transaction_type == Transaction.TransactionType.INCOME
+		and meta.get('operation_kind') == 'capitalization'
+	):
+		return CAPITALIZATION_DESCRIPTION
+	if transaction_type == Transaction.TransactionType.WITHDRAWAL:
+		return f'Погашение депозита {product.name}'
+	return ''
 
 
 def _deposit_units_from_transactions(product: Product) -> Decimal:
@@ -108,6 +166,9 @@ def refresh_deposit_product_from_transactions(product: Product, *, save: bool = 
 	if product.current_value_usd != current_value_usd:
 		product.current_value_usd = current_value_usd
 		update_fields.append('current_value_usd')
+	if units <= 0 and product.is_active:
+		product.is_active = False
+		update_fields.append('is_active')
 	if len(update_fields) == 1:
 		return False
 	if save:
@@ -509,6 +570,13 @@ def create_transaction(
 		quantity=quantity,
 		metadata=metadata,
 	)
+	amount = _normalize_transaction_amount_sign(transaction_type, amount, product=product)
+	description = _description_for_deposit_transaction(
+		product=product,
+		transaction_type=transaction_type,
+		description=description,
+		metadata=metadata,
+	)
 	if transaction_type == Transaction.TransactionType.TRANSFER and related_account is not None:
 		return _create_transfer_pair(
 			source_account=account,
@@ -578,6 +646,13 @@ def update_transaction(
 		transaction_type=transaction_type,
 		amount=amount,
 		quantity=quantity,
+		metadata=metadata,
+	)
+	amount = _normalize_transaction_amount_sign(transaction_type, amount, product=product)
+	description = _description_for_deposit_transaction(
+		product=product,
+		transaction_type=transaction_type,
+		description=description,
 		metadata=metadata,
 	)
 	old_account = Transaction.objects.select_related('account').get(pk=ledger_transaction.pk).account

@@ -6,9 +6,18 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.utils import timezone
 
+from apps.common.services.finstore_income import (
+    estimate_finstore_redemption_income_amount,
+    is_finstore_token,
+)
+from apps.common.services.indexed_bonds import units_held_on_date
 from apps.products.analytics import product_group_label, product_group_key
 from apps.products.models import Product
-from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
+from apps.products.services.deposit_schedule import (
+    estimate_rolling_deposit_income_amount,
+    latest_deposit_income_date,
+    upcoming_deposit_income_dates,
+)
 from apps.products.services.token_terms import (
     estimate_next_income_amount,
     income_payment_dates,
@@ -208,13 +217,37 @@ def build_operations_calendar(
                 product,
                 reference=reference,
                 window_end=window_end,
-            )
-            amount, amount_usd = estimate_next_income_amount(
-                product,
-                today=reference,
                 transactions=product_transactions,
             )
+            previous_payment_date = latest_deposit_income_date(
+                product,
+                transactions=product_transactions,
+            )
+            accrued_principal: Decimal | None = None
+            if previous_payment_date is not None:
+                held = units_held_on_date(
+                    product,
+                    previous_payment_date,
+                    transactions=product_transactions,
+                )
+                if held > 0:
+                    accrued_principal = held * (product.current_price or Decimal('1'))
             for forecast_date in forecast_dates:
+                amount, amount_usd = (None, None)
+                if previous_payment_date is not None:
+                    amount, amount_usd = estimate_rolling_deposit_income_amount(
+                        product,
+                        forecast_date,
+                        previous_payment_date=previous_payment_date,
+                        principal=accrued_principal,
+                    )
+                if amount is None:
+                    amount, amount_usd = estimate_next_income_amount(
+                        product,
+                        payment_date=forecast_date,
+                        today=reference,
+                        transactions=product_transactions,
+                    )
                 _append_income_event(
                     day_groups,
                     product=product,
@@ -223,11 +256,45 @@ def build_operations_calendar(
                     amount=amount,
                     amount_usd=amount_usd,
                     description=(
-                        f'{product.annual_rate_pct}% p.a. · position × rate / period'
-                        if product.annual_rate_pct
-                        else 'Estimated from income payment history'
+                        f'{product.annual_rate_pct}% p.a. · actual days since last payment'
+                        if amount is not None and previous_payment_date is not None
+                        else (
+                            f'{product.annual_rate_pct}% p.a. · position × rate / period'
+                            if product.annual_rate_pct
+                            else 'Estimated from income payment history'
+                        )
                     ),
                 )
+                metadata = product.metadata if isinstance(product.metadata, dict) else {}
+                if (
+                    amount is not None
+                    and accrued_principal is not None
+                    and str(metadata.get('interest_mode', '')).casefold() == 'capitalized'
+                ):
+                    accrued_principal += amount
+                previous_payment_date = forecast_date
+
+            if (
+                maturity_in_window
+                and previous_payment_date is not None
+                and product.maturity_date > previous_payment_date
+            ):
+                amount, amount_usd = estimate_rolling_deposit_income_amount(
+                    product,
+                    product.maturity_date,
+                    previous_payment_date=previous_payment_date,
+                    principal=accrued_principal,
+                )
+                if amount is not None:
+                    _append_income_event(
+                        day_groups,
+                        product=product,
+                        label=label,
+                        forecast_date=product.maturity_date,
+                        amount=amount,
+                        amount_usd=amount_usd,
+                        description='Accrued interest through deposit maturity date',
+                    )
             continue
 
         forecast_dates = upcoming_token_income_dates(
@@ -260,6 +327,24 @@ def build_operations_calendar(
                     else 'Estimated from income payment history'
                 ),
             )
+
+        if maturity_in_window and is_finstore_token(product):
+            amount, amount_usd = estimate_finstore_redemption_income_amount(
+                product,
+                product.maturity_date,
+                transactions=product_transactions,
+                scheduled_payment_dates=forecast_dates,
+            )
+            if amount is not None:
+                _append_income_event(
+                    day_groups,
+                    product=product,
+                    label=label,
+                    forecast_date=product.maturity_date,
+                    amount=amount,
+                    amount_usd=amount_usd,
+                    description='Accrued income through early redemption date',
+                )
 
     calendar_days = []
     for day in sorted(day_groups.keys()):

@@ -597,7 +597,12 @@ def upcoming_token_income_dates(
 	}:
 		from apps.products.services.deposit_schedule import upcoming_deposit_income_dates
 
-		return upcoming_deposit_income_dates(product, reference=reference, window_end=window_end)
+		return upcoming_deposit_income_dates(
+			product,
+			reference=reference,
+			window_end=window_end,
+			transactions=transactions,
+		)
 
 	dates: list[date] = []
 	cursor = reference
@@ -636,7 +641,11 @@ def estimate_next_income_date(
 	}:
 		from apps.products.services.deposit_schedule import estimate_deposit_next_income_date
 
-		scheduled = estimate_deposit_next_income_date(product, today=reference)
+		scheduled = estimate_deposit_next_income_date(
+			product,
+			today=reference,
+			transactions=transactions,
+		)
 		if scheduled is not None:
 			return scheduled
 

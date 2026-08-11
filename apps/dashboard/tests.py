@@ -1205,3 +1205,291 @@ class DashboardCashFlowTests(TestCase):
 
 		self.assertIn('cash_flows', metrics)
 		self.assertEqual(metrics['cash_flows'].as_of_date, timezone.localdate())
+
+
+class PeriodAttributionTests(TestCase):
+	def setUp(self):
+		self.usd = Currency.objects.create(code='USD', name='US Dollar', symbol='$', usd_rate=Decimal('1'))
+		self.institution = FinancialInstitution.objects.create(
+			name='Attribution Bank',
+			slug='attribution-bank',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+			base_currency=self.usd,
+		)
+		self.reference_date = date(2026, 6, 9)
+		self.as_of_date = date(2026, 6, 10)
+
+	def _account(self, name: str, baseline: Decimal) -> Account:
+		account = Account.objects.create(
+			institution=self.institution,
+			name=name,
+			account_type=Account.AccountType.BANK,
+			currency=self.usd,
+			current_balance=baseline,
+			current_balance_usd=baseline,
+		)
+		BalanceSnapshot.objects.create(
+			institution=self.institution,
+			account=account,
+			currency=self.usd,
+			balance=baseline,
+			balance_usd=baseline,
+			captured_at=timezone.make_aware(datetime(2026, 6, 9, 12, 0)),
+		)
+		return account
+
+	def _comparison(self) -> dict:
+		cache = PortfolioHistoryCache.build()
+		current = _historical_portfolio_context(self.as_of_date, portfolio_cache=cache)
+		comparisons = _build_portfolio_period_comparisons(
+			self.as_of_date,
+			current,
+			portfolio_cache=cache,
+		)
+		return next(item for item in comparisons if item['key'] == 'prev_day')
+
+	def test_external_account_flows_are_not_organic_growth(self):
+		account = self._account('External cash', Decimal('0'))
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('100'),
+			amount_usd=Decimal('100'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=account,
+			transaction_type=Transaction.TransactionType.WITHDRAWAL,
+			currency=self.usd,
+			amount=Decimal('-30'),
+			amount_usd=Decimal('-30'),
+			import_fingerprint='attribution-external-withdrawal',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 13, 0)),
+		)
+
+		comparison = self._comparison()
+		account_row = next(
+			row for row in comparison['breakdown_account_entities'] if row['label'] == account.name
+		)
+
+		self.assertEqual(account_row['change']['change_abs'], Decimal('70'))
+		self.assertEqual(account_row['change']['contributions_usd'], Decimal('100'))
+		self.assertEqual(account_row['change']['withdrawals_usd'], Decimal('30'))
+		self.assertEqual(account_row['change']['organic_change_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('0'))
+
+	def test_paid_deposit_income_is_attributed_once_to_product(self):
+		account = self._account('Deposit income account', Decimal('0'))
+		product = Product.objects.create(
+			institution=self.institution,
+			income_account=account,
+			name='Payout deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=self.usd,
+			units=Decimal('1000'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('1000'),
+			external_id='ATTRIBUTION-DEPOSIT',
+			metadata={'interest_mode': 'payout'},
+		)
+		BalanceSnapshot.objects.create(
+			institution=self.institution,
+			product=product,
+			currency=self.usd,
+			balance=Decimal('1000'),
+			balance_usd=Decimal('1000'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 9, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.INCOME,
+			currency=self.usd,
+			amount=Decimal('10'),
+			amount_usd=Decimal('10'),
+			quantity=Decimal('0'),
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+		)
+
+		comparison = self._comparison()
+		product_row = next(
+			row for row in comparison['breakdown_product_entities'] if row['label'] == product.name
+		)
+		account_row = next(
+			row for row in comparison['breakdown_account_entities'] if row['label'] == account.name
+		)
+		deposit_group = next(
+			row for row in comparison['breakdown_groups'] if row['label'] == 'Deposits + bank accounts'
+		)
+
+		self.assertEqual(product_row['change']['withdrawals_usd'], Decimal('10'))
+		self.assertEqual(product_row['change']['organic_change_usd'], Decimal('10'))
+		self.assertEqual(account_row['change']['contributions_usd'], Decimal('10'))
+		self.assertEqual(account_row['change']['organic_change_usd'], Decimal('0'))
+		self.assertEqual(deposit_group['change']['contributions_usd'], Decimal('0'))
+		self.assertEqual(deposit_group['change']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(deposit_group['change']['organic_change_usd'], Decimal('10'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('10'))
+
+	def test_product_purchase_and_fee_cancel_account_funding(self):
+		account = self._account('Investment cash', Decimal('100'))
+		product = Product.objects.create(
+			institution=self.institution,
+			income_account=account,
+			name='Attributed token',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('10'),
+			current_price=Decimal('10'),
+			current_value_usd=Decimal('100'),
+			external_id='ATTRIBUTION-TOKEN',
+		)
+		for fingerprint, tx_type, amount, quantity in (
+			('attribution-buy', Transaction.TransactionType.TRADE, Decimal('-100'), Decimal('10')),
+			('attribution-fee', Transaction.TransactionType.FEE, Decimal('-5'), Decimal('0')),
+		):
+			Transaction.objects.create(
+				account=account,
+				product=product,
+				transaction_type=tx_type,
+				currency=self.usd,
+				amount=amount,
+				amount_usd=amount,
+				quantity=quantity,
+				unit_price=Decimal('10') if quantity else Decimal('0'),
+				import_fingerprint=fingerprint,
+				occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+			)
+
+		comparison = self._comparison()
+		product_row = next(
+			row for row in comparison['breakdown_product_entities'] if row['label'] == product.name
+		)
+
+		self.assertEqual(product_row['change']['contributions_usd'], Decimal('105'))
+		self.assertEqual(product_row['change']['organic_change_usd'], Decimal('-5'))
+		self.assertEqual(comparison['portfolio']['contributions_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('-5'))
+
+	def test_product_sale_attributes_realized_gain_to_product(self):
+		account = self._account('Sale cash', Decimal('0'))
+		product = Product.objects.create(
+			institution=self.institution,
+			income_account=account,
+			name='Sale token',
+			product_type=Product.ProductType.TOKEN,
+			currency=self.usd,
+			units=Decimal('5'),
+			current_price=Decimal('10'),
+			current_value_usd=Decimal('50'),
+			external_id='ATTRIBUTION-SALE',
+		)
+		BalanceSnapshot.objects.create(
+			institution=self.institution,
+			product=product,
+			currency=self.usd,
+			balance=Decimal('10'),
+			balance_usd=Decimal('100'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 9, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.TRADE,
+			currency=self.usd,
+			amount=Decimal('60'),
+			amount_usd=Decimal('60'),
+			quantity=Decimal('-5'),
+			unit_price=Decimal('12'),
+			import_fingerprint='attribution-sale',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+		)
+
+		comparison = self._comparison()
+		product_row = next(
+			row for row in comparison['breakdown_product_entities'] if row['label'] == product.name
+		)
+
+		self.assertEqual(product_row['change']['change_abs'], Decimal('-50'))
+		self.assertEqual(product_row['change']['withdrawals_usd'], Decimal('60'))
+		self.assertEqual(product_row['change']['organic_change_usd'], Decimal('10'))
+		self.assertEqual(comparison['portfolio']['contributions_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('10'))
+
+	def test_capitalized_interest_is_product_growth_without_cash_flow(self):
+		account = self._account('Capitalized deposit account', Decimal('0'))
+		product = Product.objects.create(
+			institution=self.institution,
+			income_account=account,
+			name='Capitalized deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=self.usd,
+			units=Decimal('1010'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('1010'),
+			external_id='ATTRIBUTION-CAPITALIZED',
+			metadata={'interest_mode': 'capitalized'},
+		)
+		BalanceSnapshot.objects.create(
+			institution=self.institution,
+			product=product,
+			currency=self.usd,
+			balance=Decimal('1000'),
+			balance_usd=Decimal('1000'),
+			captured_at=timezone.make_aware(datetime(2026, 6, 9, 12, 0)),
+		)
+		Transaction.objects.create(
+			account=account,
+			product=product,
+			transaction_type=Transaction.TransactionType.INCOME,
+			currency=self.usd,
+			amount=Decimal('10'),
+			amount_usd=Decimal('10'),
+			quantity=Decimal('10'),
+			import_fingerprint='attribution-capitalization',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+			metadata={
+				'operation_kind': 'capitalization',
+				'interest_mode': 'capitalized',
+				'exclude_from_account_balance': True,
+			},
+		)
+
+		comparison = self._comparison()
+		product_row = next(
+			row for row in comparison['breakdown_product_entities'] if row['label'] == product.name
+		)
+
+		self.assertEqual(product_row['change']['change_abs'], Decimal('10'))
+		self.assertEqual(product_row['change']['contributions_usd'], Decimal('0'))
+		self.assertEqual(product_row['change']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(product_row['change']['organic_change_usd'], Decimal('10'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('10'))
+
+	def test_internal_transfer_cancels_at_portfolio_level(self):
+		source = self._account('Transfer source', Decimal('100'))
+		destination = self._account('Transfer destination', Decimal('0'))
+		for account, related_account, amount, leg in (
+			(source, destination, Decimal('-40'), 'out'),
+			(destination, source, Decimal('40'), 'in'),
+		):
+			Transaction.objects.create(
+				account=account,
+				related_account=related_account,
+				transaction_type=Transaction.TransactionType.TRANSFER,
+				currency=self.usd,
+				amount=amount,
+				amount_usd=amount,
+				import_fingerprint=f'attribution-transfer-{leg}',
+				occurred_at=timezone.make_aware(datetime(2026, 6, 10, 12, 0)),
+				metadata={'transfer_pair_id': 'attribution-transfer', 'transfer_leg': leg},
+			)
+
+		comparison = self._comparison()
+
+		self.assertEqual(comparison['accounts']['contributions_usd'], Decimal('0'))
+		self.assertEqual(comparison['accounts']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('0'))

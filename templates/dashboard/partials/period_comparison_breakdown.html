@@ -7,6 +7,9 @@
                 <th class="text-right">Current USD</th>
                 <th class="text-right">Baseline USD</th>
                 <th class="text-right">Change</th>
+                <th class="text-right">Added</th>
+                <th class="text-right">Withdrawn</th>
+                <th class="text-right">Own result</th>
             </tr>
         </thead>
         <tbody>
@@ -40,10 +43,33 @@
                     <td class="text-right font-mono">${{ row.current_usd|floatformat:2 }}</td>
                     <td class="text-right font-mono">${{ row.change.baseline_usd|floatformat:2 }}</td>
                     <td class="text-right">{% include 'dashboard/partials/value_change.html' with change=row.change %}</td>
+                    <td class="text-right font-mono">
+                        {% if row.change.contributions_usd %}
+                            ${{ row.change.contributions_usd|floatformat:2 }}
+                        {% else %}
+                            <span class="muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right font-mono">
+                        {% if row.change.withdrawals_usd %}
+                            ${{ row.change.withdrawals_usd|floatformat:2 }}
+                        {% else %}
+                            <span class="muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right font-mono">
+                        {% if row.change.organic_change_usd > 0 %}
+                            <span class="delta-up">+${{ row.change.organic_change_usd|floatformat:2 }}</span>
+                        {% elif row.change.organic_change_usd < 0 %}
+                            <span class="delta-down">${{ row.change.organic_change_usd|floatformat:2 }}</span>
+                        {% else %}
+                            <span class="muted">—</span>
+                        {% endif %}
+                    </td>
                 </tr>
             {% empty %}
                 <tr>
-                    <td colspan="4" class="empty-state">{{ empty_label }}</td>
+                    <td colspan="7" class="empty-state">{{ empty_label }}</td>
                 </tr>
             {% endfor %}
         </tbody>

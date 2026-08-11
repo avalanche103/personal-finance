@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
+from django.utils import timezone
+
+from apps.accounts.models import Transaction
 from apps.products.models import Product
+
+
+ALFABANK_PAYOUT_INTERVAL_DAYS = 15
+ALFABANK_DAY_COUNT_BASIS = 365
 
 
 def _parse_opened_at(product: Product) -> date | None:
@@ -45,15 +53,156 @@ def _date_on_anchor_day(year: int, month: int, anchor_day: int) -> date:
 	return date(year, month, min(anchor_day, monthrange(year, month)[1]))
 
 
+def _metadata_int(product: Product, key: str, default: int = 0) -> int:
+	metadata = product.metadata if isinstance(product.metadata, dict) else {}
+	try:
+		return int(metadata.get(key, default) or default)
+	except (TypeError, ValueError):
+		return default
+
+
+def _uses_rolling_day_count_forecast(product: Product) -> bool:
+	return (
+		product.product_type == Product.ProductType.DEPOSIT
+		and product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY
+		and _metadata_int(product, 'income_interval_days') > 0
+	)
+
+
+def _uses_actual_day_count_forecast(product: Product) -> bool:
+	"""Monthly/capitalized deposits accrue by actual days between payments (BNB-style)."""
+	if product.product_type != Product.ProductType.DEPOSIT:
+		return False
+	if product.income_schedule == Product.IncomeSchedule.MONTHLY:
+		return True
+	return _uses_rolling_day_count_forecast(product)
+
+
+def _following_weekday(value: date) -> date:
+	if value.weekday() == 5:
+		return value + timedelta(days=2)
+	if value.weekday() == 6:
+		return value + timedelta(days=1)
+	return value
+
+
+def _income_transaction_dates(
+	product: Product,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> list[date]:
+	source = transactions if transactions is not None else product.transactions.order_by('occurred_at', 'id')
+	dates = []
+	for ledger_transaction in source:
+		if ledger_transaction.transaction_type != Transaction.TransactionType.INCOME:
+			continue
+		payment_date = timezone.localdate(ledger_transaction.occurred_at)
+		if not dates or dates[-1] != payment_date:
+			dates.append(payment_date)
+	return dates
+
+
+def latest_deposit_income_date(
+	product: Product,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> date | None:
+	dates = _income_transaction_dates(product, transactions=transactions)
+	return dates[-1] if dates else None
+
+
+def _rolling_income_dates(
+	product: Product,
+	*,
+	reference: date,
+	window_end: date,
+	transactions: list[Transaction] | None = None,
+) -> list[date]:
+	interval_days = _metadata_int(product, 'income_interval_days')
+	if interval_days <= 0:
+		return []
+	payment_dates = _income_transaction_dates(product, transactions=transactions)
+	anchor = payment_dates[-1] if payment_dates else None
+	if anchor is None:
+		return []
+
+	dates = []
+	for _ in range(36):
+		candidate = _following_weekday(anchor + timedelta(days=interval_days))
+		anchor = candidate
+		if candidate < reference:
+			continue
+		if product.maturity_date and candidate > product.maturity_date:
+			break
+		if candidate > window_end:
+			break
+		dates.append(candidate)
+	return dates
+
+
+def estimate_rolling_deposit_income_amount(
+	product: Product,
+	payment_date: date,
+	*,
+	previous_payment_date: date,
+	principal: Decimal | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
+	if not _uses_actual_day_count_forecast(product):
+		return None, None
+	if product.annual_rate_pct is None or product.annual_rate_pct <= 0:
+		return None, None
+	if principal is None:
+		principal = product.market_value
+	if principal <= 0:
+		return None, None
+	accrual_days = (payment_date - previous_payment_date).days
+	if accrual_days <= 0:
+		return None, None
+	basis = _metadata_int(product, 'income_day_count_basis', ALFABANK_DAY_COUNT_BASIS)
+	if basis <= 0:
+		basis = ALFABANK_DAY_COUNT_BASIS
+	amount = (
+		principal
+		* product.annual_rate_pct
+		/ Decimal('100')
+		* Decimal(accrual_days)
+		/ Decimal(basis)
+	).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	amount_usd = None
+	if product.current_value_usd and product.units and product.units > 0:
+		principal_usd = product.current_value_usd * principal / product.units
+		amount_usd = (
+			principal_usd
+			* product.annual_rate_pct
+			/ Decimal('100')
+			* Decimal(accrual_days)
+			/ Decimal(basis)
+		).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	elif getattr(product, 'currency', None) is not None and product.currency.usd_rate:
+		amount_usd = (amount * product.currency.usd_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	return amount, amount_usd
+
+
 def upcoming_deposit_income_dates(
 	product: Product,
 	*,
 	reference: date,
 	window_end: date,
+	transactions: list[Transaction] | None = None,
 ) -> list[date]:
 	opened_at = _parse_opened_at(product)
+	paid_dates = set(_income_transaction_dates(product, transactions=transactions))
 
 	if product.income_schedule == Product.IncomeSchedule.TWICE_MONTHLY:
+		if _uses_rolling_day_count_forecast(product):
+			rolling_dates = _rolling_income_dates(
+				product,
+				reference=reference,
+				window_end=window_end,
+				transactions=transactions,
+			)
+			if rolling_dates:
+				return [candidate for candidate in rolling_dates if candidate not in paid_dates]
 		if opened_at is None:
 			return []
 		day1, day2 = deposit_income_anchor_days(opened_at)
@@ -62,6 +211,8 @@ def upcoming_deposit_income_dates(
 		for _ in range(36):
 			for candidate in deposit_income_dates_in_month(year, month, day1=day1, day2=day2):
 				if candidate < opened_at or candidate < reference:
+					continue
+				if candidate in paid_dates:
 					continue
 				if product.maturity_date and candidate > product.maturity_date:
 					continue
@@ -84,7 +235,7 @@ def upcoming_deposit_income_dates(
 			candidate = _date_on_anchor_day(year, month, anchor_day)
 			if opened_at is not None and candidate < opened_at:
 				pass
-			elif candidate >= reference:
+			elif candidate >= reference and candidate not in paid_dates:
 				if product.maturity_date and candidate > product.maturity_date:
 					break
 				if candidate > window_end:
@@ -99,6 +250,16 @@ def upcoming_deposit_income_dates(
 	return []
 
 
-def estimate_deposit_next_income_date(product: Product, *, today: date) -> date | None:
-	upcoming = upcoming_deposit_income_dates(product, reference=today, window_end=today.replace(year=today.year + 2))
+def estimate_deposit_next_income_date(
+	product: Product,
+	*,
+	today: date,
+	transactions: list[Transaction] | None = None,
+) -> date | None:
+	upcoming = upcoming_deposit_income_dates(
+		product,
+		reference=today,
+		window_end=today.replace(year=today.year + 2),
+		transactions=transactions,
+	)
 	return upcoming[0] if upcoming else None

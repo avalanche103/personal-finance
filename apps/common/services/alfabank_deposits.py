@@ -21,7 +21,11 @@ from apps.common.services.bnb_deposits import (
 from apps.imports.services.parsers.base import ParseResult
 from apps.institutions.models import FinancialInstitution
 from apps.products.models import Product
-from apps.products.services.deposit_schedule import estimate_deposit_next_income_date
+from apps.products.services.deposit_schedule import (
+	ALFABANK_DAY_COUNT_BASIS,
+	ALFABANK_PAYOUT_INTERVAL_DAYS,
+	estimate_deposit_next_income_date,
+)
 
 ALFABANK_SLUG = 'alfabank'
 ALFABANK_BYN_ACCOUNT_NAME = 'АльфаБанк BYN Account'
@@ -159,6 +163,9 @@ def _build_product_metadata(statement: dict) -> dict:
 		'return_account': statement.get('return_account', ''),
 		'opened_at': statement.get('opened_at', ''),
 		'interest_mode': statement.get('interest_mode', 'payout'),
+		'income_interval_days': ALFABANK_PAYOUT_INTERVAL_DAYS,
+		'income_day_count_basis': ALFABANK_DAY_COUNT_BASIS,
+		'income_date_adjustment': 'following_weekday',
 		'as_of_date': statement.get('as_of_date', ''),
 		'initial_amount_byn': statement.get('initial_amount_byn', ''),
 		'balance_byn': statement.get('balance_byn', ''),

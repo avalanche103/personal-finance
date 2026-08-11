@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -9,6 +9,7 @@ from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
@@ -319,7 +320,7 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(job.status, ImportJob.Status.SAVED)
 		self.assertEqual(job.details['metadata']['parser_variant'], 'aigenis-report')
 		self.assertEqual(job.details['metadata']['products_created'], 2)
-		self.assertEqual(job.details['metadata']['transactions_created'], 10)
+		self.assertEqual(job.details['metadata']['transactions_created'], 9)
 
 		product = Product.objects.get(institution=institution, external_id='BCSE-00477-P01')
 		op51 = Product.objects.get(institution=institution, external_id='BCSE-00487-P02')
@@ -330,25 +331,96 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertGreater(product.current_price, Decimal('0'))
 
 		transactions = Transaction.objects.filter(import_job=job).order_by('occurred_at', 'id')
-		self.assertEqual(transactions.count(), 10)
-		funding_legs = [
-			tx for tx in transactions
-			if tx.transaction_type == Transaction.TransactionType.TRANSFER
-		]
-		self.assertEqual(len(funding_legs), 2)
-		self.assertEqual({str(tx.amount) for tx in funding_legs}, {'-100.00', '100.00'})
+		# Alfa bootstrap balance is 0 (not shown) → Paritet top-up is Deposit, not Alfa transfer.
+		self.assertEqual(transactions.count(), 9)
+		funding = transactions[0]
+		self.assertEqual(funding.transaction_type, Transaction.TransactionType.DEPOSIT)
+		self.assertEqual(str(funding.amount), '100.00')
+		self.assertEqual(funding.metadata.get('deposit_source_actual'), 'external')
 		alfa = Account.objects.get(institution__slug='alfabank', currency__code='BYN')
-		self.assertEqual({tx.account_id for tx in funding_legs}, {alfa.pk, Account.objects.get(institution=institution, currency__code='BYN').pk})
-		self.assertEqual(funding_legs[0].metadata.get('deposit_source_actual'), 'alfabank')
-		self.assertEqual(transactions[2].transaction_type, Transaction.TransactionType.TRADE)
-		self.assertEqual(str(transactions[2].amount), '-516.97')
+		self.assertEqual(str(alfa.current_balance), '0.00')
+		self.assertEqual(transactions[1].transaction_type, Transaction.TransactionType.TRADE)
+		self.assertEqual(str(transactions[1].amount), '-516.97')
+		self.assertEqual(transactions[1].product, product)
+		self.assertEqual(transactions[2].transaction_type, Transaction.TransactionType.FEE)
+		self.assertEqual(str(transactions[2].amount), '-1.06')
 		self.assertEqual(transactions[2].product, product)
-		self.assertEqual(transactions[3].transaction_type, Transaction.TransactionType.FEE)
-		self.assertEqual(str(transactions[3].amount), '-1.06')
-		self.assertEqual(transactions[3].product, product)
 
 		account = Account.objects.get(institution=institution, currency__code='BYN')
 		self.assertEqual(str(account.current_balance), '-1853.22')
+
+	def test_aigenis_paritet_funding_uses_alfa_transfer_when_alfa_balance_shown(self):
+		from apps.institutions.models import FinancialInstitution
+
+		institution = FinancialInstitution.objects.create(
+			name='Aigenis Transfer Test',
+			slug='aigenis-transfer-test',
+			institution_type=FinancialInstitution.InstitutionType.BROKER,
+		)
+		byn = Account.objects.filter(currency__code='BYN').first().currency
+		Account.objects.create(
+			institution=institution,
+			name='Aigenis BYN Account',
+			account_type=Account.AccountType.BROKERAGE,
+			currency=byn,
+		)
+		alfa = Account.objects.get(institution__slug='alfabank', currency__code='BYN')
+		Transaction.objects.create(
+			account=alfa,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=byn,
+			amount=Decimal('250.00'),
+			amount_usd=Decimal('75.00'),
+			import_fingerprint='test-alfa-opening-balance',
+			occurred_at=timezone.make_aware(datetime(2026, 8, 1, 12, 0)),
+			description='Opening balance for funding transfer test',
+		)
+		from apps.accounts.services.balance import sync_account_balance
+
+		sync_account_balance(alfa)
+		alfa.refresh_from_db()
+		self.assertEqual(str(alfa.current_balance), '250.00')
+
+		source = ImportSource.objects.create(
+			name='Aigenis Broker Report Transfer',
+			code='aigenis-report-transfer-test',
+			source_type=ImportSource.SourceType.XLS,
+			institution=institution,
+			is_active=True,
+		)
+		workbook = BytesIO()
+		pd.DataFrame(
+			[
+				['', 'Клиент', 'ИЗОТОВ АНТОН ВАДИМОВИЧ', '', '', '', '', '', 'ОТЧЕТ БРОКЕРА'],
+				['', 'Договор №', 'A0906122022', 'от 06.12.2022'],
+				['', 'Период с', '01.08.2026', 'по 10.08.2026'],
+				['Дата совершения операции', 'Тип операции', 'Срок сделки (дней)', 'Вид ценной бумаги (источник пополнения)', 'Режим торгов', 'Эмитент', 'Наименование ценной бумаги', '№ гос.регистрации выпуска', 'Валюта операции', 'Цена покупки/продажи за единицу', 'Кол-во ценных бумаг (штук)', 'Сумма операции'],
+				['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'],
+				['2026-08-10', 'Пополнение д.с.', '', 'Паритетбанк', '', '', '', '', '', '', '', '100.00'],
+			]
+		).to_excel(workbook, index=False, header=False)
+		workbook.seek(0)
+		upload = SimpleUploadedFile(
+			'Aigenis_funding_transfer.xlsx',
+			workbook.getvalue(),
+			content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		)
+
+		job, created = process_uploaded_import(source, upload)
+		self.assertTrue(created)
+		self.assertEqual(job.status, ImportJob.Status.SAVED)
+
+		funding_legs = list(
+			Transaction.objects.filter(
+				import_job=job,
+				transaction_type=Transaction.TransactionType.TRANSFER,
+			).order_by('amount')
+		)
+		self.assertEqual(len(funding_legs), 2)
+		self.assertEqual({str(tx.amount) for tx in funding_legs}, {'-100.00', '100.00'})
+		self.assertEqual(funding_legs[0].metadata.get('deposit_source_actual'), 'alfabank')
+		alfa.refresh_from_db()
+		self.assertEqual(str(alfa.current_balance), '150.00')
 
 	def test_finstore_clipboard_income_does_not_close_existing_position(self):
 		source = ImportSource.objects.get(code='finstore-history')

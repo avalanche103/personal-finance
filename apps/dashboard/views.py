@@ -32,6 +32,11 @@ from apps.products.analytics import (
 )
 from apps.products.models import Product
 from apps.products.operations_calendar import build_operations_calendar
+from apps.dashboard.services.period_attribution import (
+    FlowTotals,
+    PeriodFlowLedger,
+    build_period_flow_ledger,
+)
 
 PORTFOLIO_CHART_RANGES = {
     'week': {'label': 'Week', 'span_days': 6, 'step_days': 1, 'granularity': 'daily'},
@@ -84,7 +89,7 @@ class PortfolioHistoryCache:
         if account_ids:
             for ledger_transaction in (
                 Transaction.objects.filter(account_id__in=account_ids)
-                .only('id', 'account_id', 'amount', 'metadata', 'occurred_at')
+                .select_related('currency', 'product')
                 .order_by('account_id', 'occurred_at', 'id')
             ):
                 account_transaction_map[ledger_transaction.account_id].append(ledger_transaction)
@@ -567,8 +572,11 @@ def _portfolio_account_group_values(
                 'label': institution.name,
                 'institution': institution,
                 'value_usd': Decimal('0'),
+                'account_ids': set(),
+                'product_ids': set(),
             }
         grouped[institution.id]['value_usd'] += value_usd
+        grouped[institution.id]['account_ids'].add(account.id)
     return grouped
 
 
@@ -601,8 +609,11 @@ def _portfolio_product_group_values(
                 'currency': product.currency,
                 'is_deposit_group': is_deposit_group,
                 'value_usd': Decimal('0'),
+                'account_ids': set(),
+                'product_ids': set(),
             }
         grouped[group_key]['value_usd'] += value_usd
+        grouped[group_key]['product_ids'].add(product.id)
     return grouped
 
 
@@ -643,6 +654,8 @@ def _comparison_group_row_defaults(group_key: str, label: str, institution=None)
         'group_accent': custom.get('accent', '#64748B'),
         'is_deposit_group': group_key == 'deposits',
         'value_usd': Decimal('0'),
+        'account_ids': set(),
+        'product_ids': set(),
     }
 
 
@@ -677,6 +690,7 @@ def _portfolio_comparison_group_values(
                 portfolio_cache=portfolio_cache,
             )
         grouped[group_key]['value_usd'] += value_usd
+        grouped[group_key]['account_ids'].add(account.id)
 
     for product in portfolio_cache.products:
         if product.product_type == Product.ProductType.DEPOSIT:
@@ -698,6 +712,7 @@ def _portfolio_comparison_group_values(
                 portfolio_cache=portfolio_cache,
             )
         grouped[group_key]['value_usd'] += value_usd
+        grouped[group_key]['product_ids'].add(product.id)
 
     return grouped
 
@@ -735,6 +750,28 @@ def _portfolio_valued_snapshot(
         'portfolio_usd': accounts_total_usd + products_total_usd,
         'accounts_total_usd': accounts_total_usd,
         'products_total_usd': products_total_usd,
+        'account_entities': {
+            account.id: {
+                'label': account.name,
+                'institution': account.institution,
+                'currency': account.currency,
+                'value_usd': account_values[account.id],
+                'account_ids': {account.id},
+                'product_ids': set(),
+            }
+            for account in portfolio_cache.accounts
+        },
+        'product_entities': {
+            product.id: {
+                'label': product.name,
+                'institution': product.institution,
+                'currency': product.currency,
+                'value_usd': product_values[product.id],
+                'account_ids': set(),
+                'product_ids': {product.id},
+            }
+            for product in portfolio_cache.products
+        },
         'account_groups': _portfolio_account_group_values(
             as_of_date,
             portfolio_cache=portfolio_cache,
@@ -757,6 +794,8 @@ def _portfolio_valued_snapshot(
 def _comparison_breakdown_rows(
     current_groups: dict,
     baseline_groups: dict,
+    *,
+    flow_ledger: PeriodFlowLedger | None = None,
 ) -> list[dict]:
     keys = set(current_groups) | set(baseline_groups)
     rows = []
@@ -768,18 +807,70 @@ def _comparison_breakdown_rows(
         if current_usd == 0 and baseline_usd == 0:
             continue
         meta = current_row or baseline_row
+        flows = (
+            flow_ledger.totals(
+                account_ids=meta.get('account_ids', set()),
+                product_ids=meta.get('product_ids', set()),
+            )
+            if flow_ledger
+            else FlowTotals()
+        )
         rows.append(
             {
                 **meta,
                 'current_usd': current_usd,
-                'change': _value_change(current_usd, baseline_usd),
+                'change': _attributed_value_change(current_usd, baseline_usd, flows),
             }
         )
     rows.sort(
-        key=lambda row: (abs(row['change']['change_abs']), row['current_usd']),
+        key=lambda row: (
+            abs(row['change']['organic_change_usd']),
+            abs(row['change']['change_abs']),
+            row['current_usd'],
+        ),
         reverse=True,
     )
     return rows
+
+
+def _attributed_value_change(
+    current_usd: Decimal,
+    baseline_usd: Decimal,
+    flows: FlowTotals,
+) -> dict:
+    change = _value_change(current_usd, baseline_usd)
+    change['contributions_usd'] = flows.contributions_usd
+    change['withdrawals_usd'] = flows.withdrawals_usd
+    change['organic_change_usd'] = (
+        change['change_abs']
+        - flows.contributions_usd
+        + flows.withdrawals_usd
+    )
+    return change
+
+
+def _portfolio_transactions(portfolio_cache: PortfolioHistoryCache) -> list[Transaction]:
+    transactions_by_id: dict[int, Transaction] = {}
+    for transactions in portfolio_cache.account_transaction_map.values():
+        for transaction in transactions:
+            transactions_by_id[transaction.id] = transaction
+    for transactions in portfolio_cache.transaction_map.values():
+        for transaction in transactions:
+            transactions_by_id[transaction.id] = transaction
+    return list(transactions_by_id.values())
+
+
+def _transaction_attribution_usd(transaction: Transaction, rate_cache: dict) -> Decimal:
+    amount_usd = _transaction_flow_usd(transaction, rate_cache)
+    if amount_usd:
+        return amount_usd
+    quantity = transaction.quantity or Decimal('0')
+    unit_price = transaction.unit_price or Decimal('0')
+    if not quantity or not unit_price:
+        return Decimal('0')
+    transaction_date = timezone.localtime(transaction.occurred_at).date()
+    rate = get_usd_conversion_rate(transaction.currency, transaction_date, rate_cache)
+    return abs(quantity * unit_price) * rate
 
 
 def _build_portfolio_period_comparisons(
@@ -798,6 +889,10 @@ def _build_portfolio_period_comparisons(
     current_portfolio_usd = current.get('portfolio_usd', current_snapshot['portfolio_usd'])
     current_accounts_usd = current.get('accounts_total_usd', current_snapshot['accounts_total_usd'])
     current_products_usd = current.get('products_total_usd', current_snapshot['products_total_usd'])
+    all_account_ids = {account.id for account in portfolio_cache.accounts}
+    all_product_ids = {product.id for product in portfolio_cache.products}
+    transactions = _portfolio_transactions(portfolio_cache)
+    attribution_rate_cache: dict = {}
     comparisons = []
     for key, label, reference_date in (
         ('prev_day', 'Previous calendar day', _previous_day(as_of_date)),
@@ -805,25 +900,67 @@ def _build_portfolio_period_comparisons(
         ('prev_year', 'Previous year end', _last_day_of_previous_year(as_of_date)),
     ):
         baseline = _portfolio_valued_snapshot(reference_date, portfolio_cache=portfolio_cache)
+        flow_ledger = build_period_flow_ledger(
+            transactions,
+            reference_date=reference_date,
+            as_of_date=as_of_date,
+            amount_usd_resolver=lambda transaction: _transaction_attribution_usd(
+                transaction,
+                attribution_rate_cache,
+            ),
+            account_ids=all_account_ids,
+            product_ids=all_product_ids,
+        )
+        portfolio_flows = flow_ledger.totals(
+            account_ids=all_account_ids,
+            product_ids=all_product_ids,
+        )
+        account_flows = flow_ledger.totals(account_ids=all_account_ids)
+        product_flows = flow_ledger.totals(product_ids=all_product_ids)
         comparisons.append(
             {
                 'key': key,
                 'label': label,
                 'reference_date': reference_date,
-                'portfolio': _value_change(current_portfolio_usd, baseline['portfolio_usd']),
-                'accounts': _value_change(current_accounts_usd, baseline['accounts_total_usd']),
-                'products': _value_change(current_products_usd, baseline['products_total_usd']),
+                'portfolio': _attributed_value_change(
+                    current_portfolio_usd,
+                    baseline['portfolio_usd'],
+                    portfolio_flows,
+                ),
+                'accounts': _attributed_value_change(
+                    current_accounts_usd,
+                    baseline['accounts_total_usd'],
+                    account_flows,
+                ),
+                'products': _attributed_value_change(
+                    current_products_usd,
+                    baseline['products_total_usd'],
+                    product_flows,
+                ),
                 'breakdown_groups': _comparison_breakdown_rows(
                     current_comparison_groups,
                     baseline['comparison_groups'],
+                    flow_ledger=flow_ledger,
                 ),
                 'breakdown_products': _comparison_breakdown_rows(
                     current_product_groups,
                     baseline['product_groups'],
+                    flow_ledger=flow_ledger,
                 ),
                 'breakdown_accounts': _comparison_breakdown_rows(
                     current_account_groups,
                     baseline['account_groups'],
+                    flow_ledger=flow_ledger,
+                ),
+                'breakdown_product_entities': _comparison_breakdown_rows(
+                    current_snapshot['product_entities'],
+                    baseline['product_entities'],
+                    flow_ledger=flow_ledger,
+                ),
+                'breakdown_account_entities': _comparison_breakdown_rows(
+                    current_snapshot['account_entities'],
+                    baseline['account_entities'],
+                    flow_ledger=flow_ledger,
                 ),
             }
         )
@@ -918,7 +1055,15 @@ def _product_native_units_as_of(
     effective_transaction_map = transaction_map or (portfolio_cache.transaction_map if portfolio_cache else None)
     snapshot = _latest_product_snapshot_as_of(product, as_of_date, portfolio_cache=portfolio_cache)
     if snapshot:
-        return snapshot.balance
+        units = snapshot.balance
+        if effective_transaction_map is not None:
+            units += sum(
+                (transaction.quantity or Decimal('0'))
+                for transaction in effective_transaction_map.get(product.id, [])
+                if transaction.occurred_at > snapshot.captured_at
+                and timezone.localtime(transaction.occurred_at).date() <= as_of_date
+            )
+        return units
     units_from_transactions = _product_units_from_transactions_as_of(product, as_of_date, effective_transaction_map)
     if units_from_transactions is not None:
         return units_from_transactions

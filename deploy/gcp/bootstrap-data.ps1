@@ -42,7 +42,23 @@ if (-not $SkipBuild) {
     Write-Host "Building image with fixture: $Image"
     Push-Location $RepoRoot
     try {
-        gcloud builds submit --tag "$Image`:latest" .
+        $BuildId = gcloud builds submit --tag "$Image`:latest" --async --format='value(id)' .
+        if ($LASTEXITCODE -ne 0 -or -not $BuildId) {
+            throw 'Failed to submit Cloud Build.'
+        }
+
+        do {
+            Start-Sleep -Seconds 10
+            $BuildStatus = gcloud builds describe $BuildId.Trim() --format='value(status)'
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to check Cloud Build $BuildId."
+            }
+            Write-Host "Cloud Build $BuildId status: $BuildStatus"
+        } while ($BuildStatus -in @('QUEUED', 'PENDING', 'WORKING'))
+
+        if ($BuildStatus -ne 'SUCCESS') {
+            throw "Cloud Build $BuildId finished with status $BuildStatus."
+        }
     } finally {
         Pop-Location
     }

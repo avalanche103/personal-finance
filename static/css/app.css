@@ -1173,6 +1173,29 @@ button {
     margin: 0 0 0.5rem;
 }
 
+.period-attribution-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.period-attribution-card {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+}
+
+.period-attribution-card > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
 .period-comparison-row-label {
     display: flex;
     align-items: center;
@@ -1183,6 +1206,11 @@ button {
 .period-comparison-table td,
 .period-comparison-table th {
     font-size: 0.8125rem;
+    white-space: nowrap;
+}
+
+.period-comparison-table {
+    min-width: 960px;
 }
 
 .institution-logo-fallback.institution-logo-sm {
@@ -1574,7 +1602,8 @@ button {
     .compact-grid,
     .info-grid,
     .settings-grid,
-    .allocation-grid {
+    .allocation-grid,
+    .period-attribution-grid {
         grid-template-columns: 1fr;
     }
 
