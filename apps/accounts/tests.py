@@ -644,3 +644,55 @@ class AccountViewsTests(TestCase):
         self.assertEqual(response.status_code, 403)
         response = self.client.get('/admin/accounts/transaction/add/')
         self.assertEqual(response.status_code, 403)
+
+    def test_transaction_create_prefills_product_type_and_redirects_to_next(self):
+        income_account = Account.objects.get(name='Checking')
+        deposit = Product.objects.create(
+            institution=self.alfa,
+            income_account=income_account,
+            name='Prefill deposit',
+            product_type=Product.ProductType.DEPOSIT,
+            currency=self.byn,
+            units=Decimal('100'),
+            current_price=Decimal('1'),
+            current_value_usd=Decimal('31'),
+        )
+        next_url = reverse('products:detail', args=[deposit.pk])
+
+        get_response = self.client.get(
+            reverse('accounts:transaction_create'),
+            {
+                'product': deposit.pk,
+                'type': Transaction.TransactionType.DEPOSIT,
+                'next': next_url,
+            },
+        )
+        self.assertEqual(get_response.status_code, 200)
+        form = get_response.context['form']
+        self.assertEqual(form.initial.get('product'), deposit.pk)
+        self.assertEqual(form.initial.get('account'), income_account.pk)
+        self.assertEqual(form.initial.get('currency'), self.byn.pk)
+        self.assertEqual(form.initial.get('transaction_type'), Transaction.TransactionType.DEPOSIT)
+        self.assertEqual(get_response.context['next_url'], next_url)
+        self.assertContains(get_response, 'Back to product')
+
+        post_response = self.client.post(
+            reverse('accounts:transaction_create'),
+            {
+                'account': income_account.pk,
+                'related_account': '',
+                'product': deposit.pk,
+                'transaction_type': Transaction.TransactionType.DEPOSIT,
+                'currency': self.byn.pk,
+                'external_id': '',
+                'amount': '25.00',
+                'quantity': '0',
+                'unit_price': '0',
+                'occurred_at': '2026-06-12T12:00',
+                'description': 'Prefill top-up',
+                'metadata': '{}',
+                'next': next_url,
+            },
+        )
+        self.assertRedirects(post_response, next_url)
+        self.assertTrue(Transaction.objects.filter(description='Prefill top-up', product=deposit).exists())

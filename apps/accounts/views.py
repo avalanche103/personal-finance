@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.dateparse import parse_date
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from apps.accounts.analytics import build_account_groups
@@ -13,6 +14,7 @@ from apps.accounts.forms import AccountForm, TransactionForm
 from apps.accounts.models import Account, Transaction
 from apps.accounts.querysets import visible_account_queryset
 from apps.common.services.ledger import delete_transaction
+from apps.products.models import Product
 
 
 TRANSACTIONS_PAGE_SIZE = 25
@@ -129,6 +131,63 @@ def _accounts_url_with_transactions(request):
     return f'{url}#transactions'
 
 
+def _safe_next_url(request, candidate: str | None) -> str | None:
+    value = (candidate or '').strip()
+    if not value:
+        return None
+    if url_has_allowed_host_and_scheme(
+        value,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return value
+    if value.startswith('/') and not value.startswith('//'):
+        return value
+    return None
+
+
+def _transaction_create_redirect(request):
+    next_url = _safe_next_url(request, request.POST.get('next') or request.GET.get('next'))
+    if next_url:
+        return next_url
+    return _accounts_url_with_transactions(request)
+
+
+def _apply_transaction_create_prefill(form, request):
+    account_id = request.GET.get('account', '').strip()
+    product_id = request.GET.get('product', '').strip()
+    transaction_type = (
+        request.GET.get('type', '').strip()
+        or request.GET.get('transaction_type', '').strip()
+    )
+
+    product = None
+    if product_id.isdigit():
+        product = (
+            Product.objects.select_related('currency', 'income_account')
+            .filter(pk=int(product_id))
+            .first()
+        )
+        if product is not None:
+            form.initial['product'] = product.pk
+            form.initial['currency'] = product.currency_id
+            if (
+                not account_id
+                and product.product_type == Product.ProductType.DEPOSIT
+                and product.income_account_id
+            ):
+                account_id = str(product.income_account_id)
+
+    if account_id.isdigit():
+        form.initial['account'] = int(account_id)
+
+    valid_types = {choice[0] for choice in Transaction.TransactionType.choices}
+    if transaction_type in valid_types:
+        form.initial['transaction_type'] = transaction_type
+
+    return product
+
+
 def account_list(request):
     query = request.GET.get('q', '').strip()
     accounts = visible_account_queryset()
@@ -173,14 +232,17 @@ def account_create(request):
 
 def transaction_create(request):
     form = TransactionForm(request.POST or None)
-    account_id = request.GET.get('account')
-    if request.method == 'GET' and account_id:
-        form.initial['account'] = account_id
+    if request.method == 'GET':
+        _apply_transaction_create_prefill(form, request)
+
+    next_url = _safe_next_url(request, request.POST.get('next') or request.GET.get('next'))
+    back_href = next_url or _accounts_url_with_transactions(request)
+    back_label = 'Back to product' if next_url else 'Back to accounts'
 
     if request.method == 'POST' and form.is_valid():
         ledger_transaction = form.save()
         messages.success(request, f'Transaction #{ledger_transaction.pk} created.')
-        return redirect(_accounts_url_with_transactions(request))
+        return redirect(_transaction_create_redirect(request))
 
     return render(
         request,
@@ -191,8 +253,9 @@ def transaction_create(request):
             'eyebrow': 'Ledger entry',
             'submit_label': 'Create transaction',
             'back_url': 'accounts:list',
-            'back_label': 'Back to accounts',
-            'back_href': _accounts_url_with_transactions(request),
+            'back_label': back_label,
+            'back_href': back_href,
+            'next_url': next_url or '',
         },
     )
 

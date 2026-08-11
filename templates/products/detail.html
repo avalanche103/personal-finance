@@ -1,4 +1,5 @@
 {% extends 'core/base.html' %}
+{% load institution_branding %}
 
 {% block title %}{{ product.name }} | {{ project_name }}{% endblock %}
 {% block page_title %}{{ product.name }}{% endblock %}
@@ -30,13 +31,19 @@
                         <span class="button button-secondary nav-arrow is-disabled" aria-hidden="true">→</span>
                     {% endif %}
                 </div>
-                <div>
-                    <p class="eyebrow">Product overview{% if nav_total %} · {{ nav_index }} / {{ nav_total }}{% endif %}</p>
-                    <h2>{{ product.name }}</h2>
-                    <p class="muted">{{ product.institution.name }} · {{ product.currency.code }}</p>
+                <div class="product-detail-brand">
+                    {% institution_logo product.institution size='lg' %}
+                    <div>
+                        <p class="eyebrow">Product overview{% if nav_total %} · {{ nav_index }} / {{ nav_total }}{% endif %}</p>
+                        <h2>{{ product.name }}</h2>
+                        <p class="muted">{{ product.institution.name }} · {{ product.get_product_type_display }} · {{ product.currency.code }}{% if not product.is_active %} · Closed{% endif %}</p>
+                    </div>
                 </div>
             </div>
-            <a class="button button-secondary" href="{% url 'products:list' %}{% if nav_query %}?{{ nav_query }}{% endif %}">Back to products</a>
+            <div class="product-detail-header-actions">
+                {% include 'products/partials/actions.html' %}
+                <a class="button button-secondary" href="{% url 'products:list' %}{% if nav_query %}?{{ nav_query }}{% endif %}">Back to products</a>
+            </div>
         </div>
 
         <div class="info-grid">
@@ -51,24 +58,22 @@
                 <span>{% if product.product_type == 'deposit' %}Principal{% else %}Units{% endif %}</span>
                 <strong>{% if product.product_type == 'token' %}{{ product.units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ product.units|floatformat:6 }}{% elif product.product_type == 'deposit' %}{{ product.market_value|floatformat:2 }} {{ product.currency.code }}{% else %}{{ product.units|floatformat:2 }}{% endif %}</strong>
             </div>
-            {% if product.product_type != 'deposit' %}
+            {% if product.product_type != 'deposit' and product.product_type != 'pension' and product.product_type != 'life_insurance' %}
                 <div class="info-card">
                     <span>Current price</span>
                     <strong>{{ product.current_price|floatformat:2 }} {{ product.currency.code }}</strong>
                 </div>
-            {% endif %}
-            <div class="info-card">
-                <span>Transactions</span>
-                <strong>{{ transaction_count }}</strong>
-            </div>
-            {% if product.product_type != 'pension' and product.product_type != 'life_insurance' and product.product_type != 'deposit' %}
-                <div class="info-card">
-                    <span>Open units</span>
-                    <strong>{% if product.product_type == 'token' %}{{ position_summary.open_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.open_units|floatformat:6 }}{% else %}{{ position_summary.open_units|floatformat:4 }}{% endif %}</strong>
-                </div>
                 <div class="info-card">
                     <span>Average entry price</span>
                     <strong>{{ position_summary.avg_entry_price|floatformat:2 }} {{ product.currency.code }}</strong>
+                </div>
+                <div class="info-card">
+                    <span>Unrealized P&amp;L</span>
+                    <strong>{{ position_summary.unrealized_pnl_usd|floatformat:2 }} USD</strong>
+                </div>
+                <div class="info-card">
+                    <span>Passive income</span>
+                    <strong>{{ position_summary.passive_income_usd|floatformat:2 }} USD</strong>
                 </div>
             {% endif %}
             {% if product.product_type == 'pension' and pension_summary %}
@@ -102,44 +107,54 @@
                     <small class="muted">{{ deposit_summary.interest_income|floatformat:2 }} {{ product.currency.code }}</small>
                 </div>
                 <div class="info-card">
-                    <span>Capitalized interest</span>
-                    <strong>{{ deposit_summary.capitalized_interest_usd|floatformat:2 }} USD</strong>
-                    <small class="muted">{{ deposit_summary.capitalized_interest|floatformat:2 }} {{ product.currency.code }}</small>
+                    <span>Total return</span>
+                    <strong class="{% if performance_summary.total_return_value > 0 %}delta-up{% elif performance_summary.total_return_value < 0 %}delta-down{% endif %}">{{ performance_summary.total_return_value|floatformat:2 }} USD</strong>
                 </div>
-            {% endif %}
-            <div class="info-card">
-                <span>Unrealized P&amp;L</span>
-                <strong>{{ position_summary.unrealized_pnl_usd|floatformat:2 }} USD</strong>
-            </div>
-            <div class="info-card">
-                <span>Returned cash</span>
-                <strong>{{ position_summary.returned_cash_usd|floatformat:2 }} USD</strong>
-            </div>
-            {% if product.product_type != 'deposit' %}
                 <div class="info-card">
-                    <span>Passive income</span>
-                    <strong>{{ position_summary.passive_income_usd|floatformat:2 }} USD</strong>
+                    <span>Opened</span>
+                    <strong class="font-mono">{% if deposit_summary.opened_at %}{{ deposit_summary.opened_at|display_date }}{% else %}—{% endif %}</strong>
                 </div>
-            {% endif %}
-            <div class="info-card">
-                <span>Open cost basis</span>
-                <strong>{{ position_summary.open_cost_basis_usd|floatformat:2 }} USD</strong>
-            </div>
+                <div class="info-card">
+                    <span>Maturity</span>
+                    <strong class="font-mono">{% if product.maturity_date %}{{ product.maturity_date|display_date }}{% else %}—{% endif %}</strong>
+                </div>
+                <div class="info-card">
+                    <span>Total return %</span>
+                    <strong class="{% if performance_summary.total_return_value > 0 %}delta-up{% elif performance_summary.total_return_value < 0 %}delta-down{% endif %}">{% if performance_summary.total_return_pct is not None %}{{ performance_summary.total_return_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
+                </div>
+                <div class="info-card">
+                    <span>XIRR</span>
+                    <strong class="{% if performance_summary.total_return_value > 0 %}delta-up{% elif performance_summary.total_return_value < 0 %}delta-down{% endif %}">{% if performance_summary.xirr_pct is not None %}{{ performance_summary.xirr_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
+                </div>
+            {% else %}
             <div class="info-card">
                 <span>Total return</span>
-                <strong>{{ performance_summary.total_return_value|floatformat:2 }} USD</strong>
+                <strong class="{% if performance_summary.total_return_value > 0 %}delta-up{% elif performance_summary.total_return_value < 0 %}delta-down{% endif %}">{{ performance_summary.total_return_value|floatformat:2 }} USD</strong>
             </div>
             <div class="info-card">
                 <span>Total return %</span>
-                <strong>{% if performance_summary.total_return_pct is not None %}{{ performance_summary.total_return_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
+                <strong class="{% if performance_summary.total_return_value > 0 %}delta-up{% elif performance_summary.total_return_value < 0 %}delta-down{% endif %}">{% if performance_summary.total_return_pct is not None %}{{ performance_summary.total_return_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
             </div>
             <div class="info-card">
                 <span>XIRR</span>
-                <strong>{% if performance_summary.xirr_pct is not None %}{{ performance_summary.xirr_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
+                <strong class="{% if performance_summary.total_return_value > 0 %}delta-up{% elif performance_summary.total_return_value < 0 %}delta-down{% endif %}">{% if performance_summary.xirr_pct is not None %}{{ performance_summary.xirr_pct|floatformat:2 }}%{% else %}-{% endif %}</strong>
             </div>
+            {% endif %}
         </div>
     </div>
 
+    {% if product.product_type == 'deposit' %}
+        <div class="grid-two product-deposit-layout">
+            <section class="panel stack-md">
+                <div>
+                    <p class="eyebrow">Issue terms</p>
+                    <h2>Deposit terms</h2>
+                </div>
+                {% include 'products/partials/deposit_terms_form.html' %}
+            </section>
+            {% include 'products/partials/transactions_panel.html' with compact=True %}
+        </div>
+    {% else %}
     <div class="grid-two">
         <section class="panel stack-md">
             <div>
@@ -148,28 +163,23 @@
             </div>
 
             <div class="meta-list">
-                <div class="meta-item"><strong>Institution</strong><div class="muted">{{ product.institution.name }}</div></div>
                 <div class="meta-item"><strong>Type</strong><div class="muted">{{ product.get_product_type_display }}{% if product.bond_kind_display %} · {{ product.bond_kind_display }}{% endif %}</div></div>
-                <div class="meta-item"><strong>{% if product.product_type == 'deposit' %}Interest account{% else %}Coupon account{% endif %}</strong><div class="muted">{% if product.income_account %}{{ product.income_account.institution.name }} · {{ product.income_account.name }}{% else %}-{% endif %}</div></div>
+                <div class="meta-item"><strong>Coupon account</strong><div class="muted">{% if product.income_account %}{{ product.income_account.institution.name }} · {{ product.income_account.name }}{% else %}-{% endif %}</div></div>
                 {% if product.metadata.face_value_usd %}
                     <div class="meta-item"><strong>Face value (USD)</strong><div class="muted font-mono">{{ product.metadata.face_value_usd }} USD{% if product.metadata.face_value_byn %} · {{ product.metadata.face_value_byn }} BYN @ {{ product.metadata.placement_fx_rate }}{% endif %}</div></div>
                 {% endif %}
-                <div class="meta-item"><strong>Currency</strong><div class="muted">{{ product.currency.code }} · {{ product.currency.name }}</div></div>
-                <div class="meta-item"><strong>{% if product.product_type == 'deposit' %}Deposited principal{% else %}Bought units{% endif %}</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.bought_units|floatformat:6 }}{% elif product.product_type == 'deposit' %}{{ position_summary.bought_units|floatformat:2 }} {{ product.currency.code }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
-                <div class="meta-item"><strong>{% if product.product_type == 'deposit' %}Withdrawn principal{% else %}Redeemed units{% endif %}</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.redeemed_units|floatformat:6 }}{% elif product.product_type == 'deposit' %}{{ position_summary.redeemed_units|floatformat:2 }} {{ product.currency.code }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
-                {% if product.product_type == 'deposit' and deposit_summary %}
-                    <div class="meta-item"><strong>Contract number</strong><div class="muted">{{ deposit_summary.contract_number|default:'-' }}</div></div>
-                    <div class="meta-item"><strong>Opened at</strong><div class="muted">{{ deposit_summary.opened_at|default:'-' }}</div></div>
-                    <div class="meta-item"><strong>Interest mode</strong><div class="muted">{{ deposit_summary.interest_mode|default:'-' }}</div></div>
-                    <div class="meta-item"><strong>Auto renewal</strong><div class="muted">{{ deposit_summary.auto_renewal|default:'-' }}</div></div>
+                <div class="meta-item"><strong>Bought units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.bought_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.bought_units|floatformat:6 }}{% else %}{{ position_summary.bought_units|floatformat:4 }}{% endif %}</div></div>
+                <div class="meta-item"><strong>Redeemed units</strong><div class="muted">{% if product.product_type == 'token' %}{{ position_summary.redeemed_units|floatformat:0 }}{% elif product.product_type == 'crypto' %}{{ position_summary.redeemed_units|floatformat:6 }}{% else %}{{ position_summary.redeemed_units|floatformat:4 }}{% endif %}</div></div>
+                {% if product.symbol %}
+                    <div class="meta-item"><strong>Symbol</strong><div class="muted">{{ product.symbol }}</div></div>
                 {% endif %}
-                <div class="meta-item"><strong>Symbol</strong><div class="muted">{{ product.symbol|default:'-' }}</div></div>
-                <div class="meta-item"><strong>ISIN</strong><div class="muted">{{ product.isin|default:'-' }}</div></div>
-                <div class="meta-item"><strong>External ID</strong><div class="muted">{{ product.external_id|default:'-' }}</div></div>
-                <div class="meta-item"><strong>Market value</strong><div class="muted">{{ product.market_value|floatformat:2 }} {{ product.currency.code }}</div></div>
+                {% if product.isin %}
+                    <div class="meta-item"><strong>ISIN</strong><div class="muted">{{ product.isin }}</div></div>
+                {% endif %}
+                {% if product.external_id %}
+                    <div class="meta-item"><strong>External ID</strong><div class="muted">{{ product.external_id }}</div></div>
+                {% endif %}
                 <div class="meta-item"><strong>Status</strong><div class="muted">{% if product.is_active %}Active{% else %}Inactive{% endif %}</div></div>
-                <div class="meta-item"><strong>Created</strong><div class="muted">{{ product.created_at|display_datetime }}</div></div>
-                <div class="meta-item"><strong>Updated</strong><div class="muted">{{ product.updated_at|display_datetime }}</div></div>
             </div>
         </section>
 
@@ -185,9 +195,6 @@
                 {% elif product.product_type == 'bond' %}
                     <h2>Bond terms</h2>
                     <p class="muted">Rate, maturity, and income schedule for this product.</p>
-                {% elif product.product_type == 'deposit' %}
-                    <h2>Deposit terms</h2>
-                    <p class="muted">Contract rate, maturity, and interest payout or capitalization schedule.</p>
                 {% else %}
                     <h2>Token terms</h2>
                     <p class="muted">Rate, maturity, and income schedule for this product.</p>
@@ -198,13 +205,12 @@
                 {% include 'products/partials/pension_terms.html' %}
             {% elif product.product_type == 'life_insurance' %}
                 {% include 'products/partials/life_insurance_terms.html' %}
-            {% elif product.product_type == 'deposit' %}
-                {% include 'products/partials/deposit_terms_form.html' %}
             {% else %}
                 {% include 'products/partials/token_terms_form.html' %}
             {% endif %}
         </section>
     </div>
+    {% endif %}
 
     {% if product.product_type == 'bond' %}
         <section class="panel stack-md">
@@ -218,17 +224,26 @@
         </section>
     {% endif %}
 
-    <section class="panel stack-md">
-        <div>
-            <p class="eyebrow">Extra data</p>
-            <h2>Metadata and rates</h2>
-        </div>
+    {% if product.product_type != 'deposit' %}
+        {% include 'products/partials/transactions_panel.html' %}
+    {% endif %}
+
+    <details class="panel stack-md product-technical-details">
+        <summary>
+            <div>
+                <p class="eyebrow">Extra data</p>
+                <h2>Technical details</h2>
+                <p class="muted">Institution, FX rates, and raw metadata.</p>
+            </div>
+        </summary>
 
         <div class="meta-list">
             <div class="meta-item"><strong>Institution website</strong><div class="muted">{{ product.institution.website|default:'-' }}</div></div>
             <div class="meta-item"><strong>Institution country</strong><div class="muted">{{ product.institution.country }}</div></div>
             <div class="meta-item"><strong>Latest BYN rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.rate_byn|stringformat:'.6f' }} on {{ latest_rate.rate_date|display_date }}{% else %}No rate history{% endif %}</div></div>
             <div class="meta-item"><strong>USD cross rate</strong><div class="muted">{% if latest_rate %}{{ latest_rate.usd_cross_rate|stringformat:'.10f' }}{% else %}-{% endif %}</div></div>
+            <div class="meta-item"><strong>Created</strong><div class="muted">{{ product.created_at|display_datetime }}</div></div>
+            <div class="meta-item"><strong>Updated</strong><div class="muted">{{ product.updated_at|display_datetime }}</div></div>
         </div>
 
         <div>
@@ -246,50 +261,7 @@
                 <p class="muted">No metadata stored for this product.</p>
             {% endif %}
         </div>
-    </section>
-
-    <section class="panel stack-md">
-        <div>
-            <p class="eyebrow">Operations</p>
-            <h2>Transactions</h2>
-            <p class="muted">{{ transaction_count }} transactions for this product.</p>
-        </div>
-
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Account</th>
-                        <th>Type</th>
-                        <th>Description</th>
-                        <th class="text-right">Quantity</th>
-                        <th class="text-right">Amount</th>
-                        <th class="text-right">Unit price</th>
-                        <th class="text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for transaction in transactions %}
-                        <tr>
-                            <td>{{ transaction.occurred_at|display_datetime }}</td>
-                            <td>{{ transaction.account.name }}</td>
-                            <td>{{ transaction.get_transaction_type_display }}</td>
-                            <td>{{ transaction.description|default:'-' }}</td>
-                            <td class="text-right">{{ transaction.quantity|floatformat:4 }}</td>
-                            <td class="text-right">{{ transaction.amount|floatformat:2 }} {{ transaction.currency.code }}</td>
-                            <td class="text-right">{{ transaction.unit_price|floatformat:4 }}</td>
-                            <td class="text-right"><a class="muted" href="{% url 'accounts:transaction_edit' transaction.pk %}">Edit</a></td>
-                        </tr>
-                    {% empty %}
-                        <tr>
-                            <td colspan="8" class="empty-state">No product transactions found.</td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
+    </details>
 
 </section>
 {% endblock %}

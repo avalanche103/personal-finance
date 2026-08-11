@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from apps.accounts.models import Transaction
+from apps.common.dates import parse_display_date
 from apps.common.models import ExchangeRateHistory
 from apps.products.analytics import (
     allocation_instrument_choices,
@@ -26,6 +27,7 @@ from apps.common.services.indexed_bonds import (
 )
 from apps.products.forms import ProductDepositTermsForm, ProductForm, ProductIncomeCalendarForm, ProductTokenTermsForm
 from apps.products.models import Product
+from apps.products.services.operations import build_product_actions
 from apps.products.services.token_terms import estimate_next_income_date, income_payment_dates
 
 
@@ -91,7 +93,7 @@ def _product_list_nav_params(request) -> dict[str, str]:
 def _product_list_queryset(request, *, ensure_product: Product | None = None):
     query = request.GET.get('q', '').strip()
     show_closed = request.GET.get('show_closed') == '1'
-    products = Product.objects.select_related('institution', 'currency')
+    products = Product.objects.select_related('institution', 'currency', 'income_account')
     if query:
         products = products.filter(
             Q(name__icontains=query)
@@ -107,7 +109,11 @@ def _product_list_queryset(request, *, ensure_product: Product | None = None):
     if ensure_product and ensure_product.pk not in product_ids:
         product_ids.insert(0, ensure_product.pk)
 
-    return Product.objects.filter(pk__in=product_ids).select_related('institution', 'currency').order_by(
+    return Product.objects.filter(pk__in=product_ids).select_related(
+        'institution',
+        'currency',
+        'income_account',
+    ).order_by(
         'institution__name',
         'currency__code',
         'name',
@@ -158,7 +164,7 @@ def product_list(request):
     query = request.GET.get('q', '').strip()
     show_closed = request.GET.get('show_closed') == '1'
     sort_field, sort_dir = _resolve_product_sort(request)
-    ordered_products = _product_list_queryset(request)
+    ordered_products = list(_product_list_queryset(request))
     allocation_type_choices = allocation_instrument_choices(ordered_products)
     available_allocation_types = {value for value, _label in allocation_type_choices}
     allocation_type = _resolve_allocation_type(request, valid_types=available_allocation_types)
@@ -294,7 +300,7 @@ def _build_product_detail_context(product: Product) -> dict:
             'capitalized_interest_usd': position_summary.get('capitalized_income_usd', Decimal('0')),
             'interest_mode': metadata.get('interest_mode', ''),
             'contract_number': metadata.get('contract_number', ''),
-            'opened_at': metadata.get('opened_at', ''),
+            'opened_at': parse_display_date(str(metadata.get('opened_at', '') or '').strip()),
             'auto_renewal': metadata.get('auto_renewal', ''),
         }
 
@@ -393,5 +399,10 @@ def product_detail(request, pk):
     context['income_calendar_events'] = build_product_income_calendar(product)
     context['estimated_next_income_date'] = estimate_next_income_date(product)
     context['income_payment_count'] = len(income_payment_dates(product))
+    context['product_actions'] = build_product_actions(product)
+    context['add_transaction_url'] = next(
+        (action['url'] for action in context['product_actions'] if action['kind'] == 'add_transaction'),
+        None,
+    )
     context.update(_product_navigation(request, product))
     return render(request, 'products/detail.html', context)

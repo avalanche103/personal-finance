@@ -591,6 +591,29 @@ class ProductViewsTests(TestCase):
 		self.assertContains(response, 'nav-arrow')
 		self.assertContains(response, 'is-disabled', count=0)
 
+	def test_product_detail_shows_type_actions_and_hides_raw_metadata(self):
+		response = self.client.get(reverse('products:detail', args=[self.product_usd.pk]))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'Coupon / income')
+		self.assertContains(response, 'Buy / sell')
+		self.assertContains(response, 'Add transaction')
+		self.assertContains(response, 'Technical details')
+		self.assertNotContains(response, 'Metadata and rates')
+		actions = response.context['product_actions']
+		self.assertTrue(any(action['kind'] == 'income' for action in actions))
+		self.assertTrue(any(action['kind'] == 'add_transaction' for action in actions))
+
+	def test_product_list_omits_row_actions_and_redundant_columns(self):
+		response = self.client.get(reverse('products:list'))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertNotContains(response, 'product-row-action')
+		self.assertNotContains(response, '>Actions</')
+		# Column headers for institution/currency are removed from the product table.
+		self.assertNotContains(response, '>Institution</')
+		self.assertNotContains(response, '>Currency</')
+
 	def test_product_detail_saves_token_terms(self):
 		response = self.client.post(
 			reverse('products:detail', args=[self.product_usd.pk]),
@@ -667,9 +690,14 @@ class ProductViewsTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, 'Deposit terms')
 		self.assertContains(response, 'Principal')
-		self.assertContains(response, 'Interest account')
-		self.assertContains(response, 'Capitalized interest')
-		self.assertContains(response, 'DEP-1')
+		self.assertContains(response, 'Opened')
+		self.assertContains(response, 'Maturity')
+		self.assertContains(response, '01.01.2026')
+		self.assertContains(response, '31.12.2026')
+		self.assertContains(response, 'Interest income')
+		self.assertNotContains(response, 'Capitalized interest')
+		self.assertNotContains(response, 'Known details')
+		self.assertNotContains(response, 'Deposited principal')
 		self.assertNotContains(response, 'Token terms')
 
 	def test_product_detail_shows_transactions_snapshots_and_rates(self):

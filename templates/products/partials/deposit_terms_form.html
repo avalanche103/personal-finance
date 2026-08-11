@@ -1,57 +1,69 @@
-<form method="post" class="stack-md token-terms-form">
+<form method="post" class="stack-md deposit-terms-form">
     {% csrf_token %}
 
-    <div class="filter-bar token-terms-fields">
-        <label class="filter-field">
-            <span>{{ terms_form.interest_mode.label }}</span>
-            {{ terms_form.interest_mode }}
-            {% if terms_form.interest_mode.help_text %}
-                <small class="muted">{{ terms_form.interest_mode.help_text }}</small>
-            {% endif %}
-            {% if terms_form.interest_mode.errors %}
-                <span class="field-error">{{ terms_form.interest_mode.errors|join:', ' }}</span>
-            {% endif %}
+    <div class="terms-form-list">
+        <label class="terms-form-row">
+            <span class="terms-form-label">{{ terms_form.interest_mode.label }}</span>
+            <span class="terms-form-control">
+                {{ terms_form.interest_mode }}
+                {% if terms_form.interest_mode.help_text %}
+                    <small class="muted">{{ terms_form.interest_mode.help_text }}</small>
+                {% endif %}
+                {% if terms_form.interest_mode.errors %}
+                    <span class="field-error">{{ terms_form.interest_mode.errors|join:', ' }}</span>
+                {% endif %}
+            </span>
         </label>
-        <label class="filter-field">
-            <span>{{ terms_form.income_account.label }}</span>
-            {{ terms_form.income_account }}
-            {% if terms_form.income_account.help_text %}
-                <small class="muted">{{ terms_form.income_account.help_text }}</small>
-            {% endif %}
-            {% if terms_form.income_account.errors %}
-                <span class="field-error">{{ terms_form.income_account.errors|join:', ' }}</span>
-            {% endif %}
+        <label class="terms-form-row">
+            <span class="terms-form-label">{{ terms_form.income_account.label }}</span>
+            <span class="terms-form-control">
+                {{ terms_form.income_account }}
+                {% if terms_form.income_account.help_text %}
+                    <small class="muted">{{ terms_form.income_account.help_text }}</small>
+                {% endif %}
+                {% if terms_form.income_account.errors %}
+                    <span class="field-error">{{ terms_form.income_account.errors|join:', ' }}</span>
+                {% endif %}
+            </span>
         </label>
-        <label class="filter-field">
-            <span>{{ terms_form.annual_rate_pct.label }}</span>
-            {{ terms_form.annual_rate_pct }}
-            {% if terms_form.annual_rate_pct.errors %}
-                <span class="field-error">{{ terms_form.annual_rate_pct.errors|join:', ' }}</span>
-            {% endif %}
+        <label class="terms-form-row">
+            <span class="terms-form-label">{{ terms_form.annual_rate_pct.label }}</span>
+            <span class="terms-form-control">
+                {{ terms_form.annual_rate_pct }}
+                {% if terms_form.annual_rate_pct.errors %}
+                    <span class="field-error">{{ terms_form.annual_rate_pct.errors|join:', ' }}</span>
+                {% endif %}
+            </span>
         </label>
-        <label class="filter-field">
-            <span>{{ terms_form.maturity_date.label }}</span>
-            {{ terms_form.maturity_date }}
-            {% if terms_form.maturity_date.errors %}
-                <span class="field-error">{{ terms_form.maturity_date.errors|join:', ' }}</span>
-            {% endif %}
+        <label class="terms-form-row">
+            <span class="terms-form-label">{{ terms_form.maturity_date.label }}</span>
+            <span class="terms-form-control">
+                {{ terms_form.maturity_date }}
+                {% if terms_form.maturity_date.errors %}
+                    <span class="field-error">{{ terms_form.maturity_date.errors|join:', ' }}</span>
+                {% endif %}
+            </span>
         </label>
-        <label class="filter-field">
-            <span>{{ terms_form.income_schedule.label }}</span>
-            {{ terms_form.income_schedule }}
-            {% if terms_form.income_schedule.errors %}
-                <span class="field-error">{{ terms_form.income_schedule.errors|join:', ' }}</span>
-            {% endif %}
+        <label class="terms-form-row">
+            <span class="terms-form-label">{{ terms_form.income_schedule.label }}</span>
+            <span class="terms-form-control">
+                {{ terms_form.income_schedule }}
+                {% if terms_form.income_schedule.errors %}
+                    <span class="field-error">{{ terms_form.income_schedule.errors|join:', ' }}</span>
+                {% endif %}
+            </span>
         </label>
-        <label class="filter-field">
-            <span>{{ terms_form.next_income_date.label }}</span>
-            {{ terms_form.next_income_date }}
-            {% if estimated_next_income_date %}
-                <small class="muted">Forecast from history: <span class="font-mono">{{ estimated_next_income_date|display_date }}</span></small>
-            {% endif %}
-            {% if terms_form.next_income_date.errors %}
-                <span class="field-error">{{ terms_form.next_income_date.errors|join:', ' }}</span>
-            {% endif %}
+        <label class="terms-form-row">
+            <span class="terms-form-label">{{ terms_form.next_income_date.label }}</span>
+            <span class="terms-form-control">
+                {{ terms_form.next_income_date }}
+                {% if estimated_next_income_date %}
+                    <small class="muted">Forecast: <span class="font-mono">{{ estimated_next_income_date|display_date }}</span></small>
+                {% endif %}
+                {% if terms_form.next_income_date.errors %}
+                    <span class="field-error">{{ terms_form.next_income_date.errors|join:', ' }}</span>
+                {% endif %}
+            </span>
         </label>
     </div>
 
@@ -66,7 +78,7 @@
         </button>
     </div>
 
-    <p class="muted">
-        {% if product.terms_updated_at %}Last saved {{ product.terms_updated_at|display_datetime }}.{% endif %}
-    </p>
+    {% if product.terms_updated_at %}
+        <p class="muted">Last saved {{ product.terms_updated_at|display_datetime }}.</p>
+    {% endif %}
 </form>

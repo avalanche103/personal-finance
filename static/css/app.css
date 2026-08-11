@@ -1395,10 +1395,55 @@ button {
     align-items: flex-start;
 }
 
+.product-detail-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.product-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.product-technical-details > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.product-technical-details > summary::-webkit-details-marker {
+    display: none;
+}
+
+.product-technical-details[open] > summary {
+    margin-bottom: 1rem;
+}
+
 .product-detail-title {
     display: flex;
     align-items: flex-start;
     gap: 1rem;
+}
+
+.product-detail-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+}
+
+.product-detail-brand .institution-logo-lg {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+}
+
+.product-detail-brand .institution-logo-fallback.institution-logo-lg {
+    font-size: 0.875rem;
 }
 
 .product-nav {
@@ -1421,6 +1466,75 @@ button {
 
 .token-terms-fields {
     align-items: flex-end;
+}
+
+.terms-form-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--bg);
+}
+
+.terms-form-row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 38%) minmax(0, 1fr);
+    gap: 0.75rem 1rem;
+    align-items: center;
+    margin: 0;
+    padding: 0.7rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.terms-form-row:last-child {
+    border-bottom: none;
+}
+
+.terms-form-label {
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    line-height: 1.3;
+}
+
+.terms-form-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.terms-form-control select,
+.terms-form-control input {
+    width: 100%;
+}
+
+.product-deposit-layout {
+    align-items: start;
+    grid-template-columns: minmax(0, 0.35fr) minmax(0, 0.65fr);
+}
+
+.product-deposit-layout .product-transactions-panel {
+    min-width: 0;
+}
+
+.product-tx-compact {
+    font-size: 0.875rem;
+}
+
+.product-tx-compact th,
+.product-tx-compact td {
+    padding: 0.45rem 0.5rem;
+    white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+    .terms-form-row {
+        grid-template-columns: 1fr;
+        align-items: stretch;
+        gap: 0.35rem;
+    }
 }
 
 .settings-grid {

@@ -1,0 +1,10 @@
+{% if product_actions %}
+<nav class="product-actions" aria-label="Product operations">
+    {% for action in product_actions %}
+        <a
+            class="button{% if action.style == 'secondary' %} button-secondary{% endif %}"
+            href="{{ action.url }}"
+        >{{ action.label }}</a>
+    {% endfor %}
+</nav>
+{% endif %}

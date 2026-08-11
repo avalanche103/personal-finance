@@ -21,6 +21,7 @@
 
     <form method="post" class="stack-md">
         {% csrf_token %}
+        {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
         {% if form.non_field_errors %}
             <div class="message error">{{ form.non_field_errors }}</div>
         {% endif %}
