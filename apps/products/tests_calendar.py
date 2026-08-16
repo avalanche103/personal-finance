@@ -298,7 +298,7 @@ class OperationsCalendarTests(TestCase):
 
         morning = build_operations_calendar([deposit], today=date(2026, 7, 29), future_days=60)
         self.assertEqual(morning[0]['date'], date(2026, 7, 29))
-        self.assertEqual(morning[0]['groups'][0]['events'][0]['amount'], Decimal('14.19'))
+        self.assertEqual(morning[0]['groups'][0]['events'][0]['amount'], Decimal('14.28'))
 
         Transaction.objects.create(
             account=self.account,
@@ -335,7 +335,27 @@ class OperationsCalendarTests(TestCase):
 
         after_fact = build_operations_calendar([deposit], today=date(2026, 7, 29), future_days=60)
         self.assertEqual([day['date'] for day in after_fact], [date(2026, 8, 29)])
-        self.assertNotEqual(after_fact[0]['groups'][0]['events'][0]['amount'], Decimal('14.95'))
+        self.assertEqual(after_fact[0]['groups'][0]['events'][0]['amount'], Decimal('15.23'))
+
+        Transaction.objects.create(
+            account=self.account,
+            product=deposit,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=self.usd,
+            amount=Decimal('544.33'),
+            amount_usd=Decimal('544.33'),
+            quantity=Decimal('544.33'),
+            occurred_at=timezone.make_aware(datetime(2026, 8, 11, 12, 0)),
+            import_fingerprint='bnb-forecast-2026-08-11-top-up',
+            metadata={
+                'operation_kind': 'top_up',
+                'interest_mode': 'capitalized',
+                'exclude_from_account_balance': True,
+            },
+        )
+        after_top_up = build_operations_calendar([deposit], today=date(2026, 8, 16), future_days=60)
+        self.assertEqual(after_top_up[0]['date'], date(2026, 8, 29))
+        self.assertEqual(after_top_up[0]['groups'][0]['events'][0]['amount'], Decimal('19.24'))
 
     def test_alfabank_forecasts_use_actual_days_and_following_weekday(self):
         alfabank = FinancialInstitution.objects.create(

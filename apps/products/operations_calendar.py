@@ -224,14 +224,6 @@ def build_operations_calendar(
                 transactions=product_transactions,
             )
             accrued_principal: Decimal | None = None
-            if previous_payment_date is not None:
-                held = units_held_on_date(
-                    product,
-                    previous_payment_date,
-                    transactions=product_transactions,
-                )
-                if held > 0:
-                    accrued_principal = held * (product.current_price or Decimal('1'))
             for forecast_date in forecast_dates:
                 amount, amount_usd = (None, None)
                 if previous_payment_date is not None:
@@ -240,6 +232,8 @@ def build_operations_calendar(
                         forecast_date,
                         previous_payment_date=previous_payment_date,
                         principal=accrued_principal,
+                        transactions=product_transactions,
+                        as_of=reference,
                     )
                 if amount is None:
                     amount, amount_usd = estimate_next_income_amount(
@@ -268,9 +262,15 @@ def build_operations_calendar(
                 metadata = product.metadata if isinstance(product.metadata, dict) else {}
                 if (
                     amount is not None
-                    and accrued_principal is not None
                     and str(metadata.get('interest_mode', '')).casefold() == 'capitalized'
                 ):
+                    if accrued_principal is None:
+                        held_now = units_held_on_date(
+                            product,
+                            min(forecast_date, reference),
+                            transactions=product_transactions,
+                        )
+                        accrued_principal = held_now * (product.current_price or Decimal('1'))
                     accrued_principal += amount
                 previous_payment_date = forecast_date
 
@@ -284,6 +284,8 @@ def build_operations_calendar(
                     product.maturity_date,
                     previous_payment_date=previous_payment_date,
                     principal=accrued_principal,
+                    transactions=product_transactions,
+                    as_of=reference,
                 )
                 if amount is not None:
                     _append_income_event(

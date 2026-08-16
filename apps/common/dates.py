@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from django.utils import timezone
 
@@ -29,6 +29,15 @@ def format_display_datetime(value: date | datetime | None) -> str:
 	if isinstance(value, date):
 		return value.strftime(DATE_DISPLAY_FORMAT)
 	return str(value)
+
+
+def following_weekday(value: date) -> date:
+	"""Move Saturday/Sunday to the following Monday. Weekday dates stay as-is."""
+	if value.weekday() == 5:
+		return value + timedelta(days=2)
+	if value.weekday() == 6:
+		return value + timedelta(days=1)
+	return value
 
 
 def parse_display_date(text: str | None) -> date | None:

@@ -25,6 +25,7 @@
     {% if income_calendar_rows %}
         <p class="muted">
             Full coupon schedule from first payment through maturity.
+            Weekend coupons are shown on the following Monday; USD amounts stay on the prospectus date.
             Enter USD coupon per 1 bond for each date from the prospectus.
         </p>
         <div class="table-wrap">
@@ -43,6 +44,9 @@
                         <tr>
                             <td>
                                 {{ row.date|display_date }}
+                                {% if row.scheduled_date and row.scheduled_date != row.date %}
+                                    <span class="muted">(scheduled {{ row.scheduled_date|display_date }})</span>
+                                {% endif %}
                                 {% if row.is_past %}<span class="muted">(paid)</span>{% elif row.is_maturity_coupon %}<span class="muted">(maturity)</span>{% else %}<span class="muted">(planned)</span>{% endif %}
                             </td>
                             <td class="text-right font-mono">{{ row.units|floatformat:0 }}</td>

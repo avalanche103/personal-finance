@@ -79,6 +79,8 @@ class IndexedBondTests(TestCase):
 		self.assertEqual(self.product.income_schedule, Product.IncomeSchedule.QUARTERLY)
 		self.assertEqual(self.product.next_income_date, date(2026, 7, 8))
 		self.assertEqual(self.product.metadata['face_value_usd'], '175.3894')
+		self.assertEqual(self.product.metadata['income_calendar']['coupon_day'], 8)
+		self.assertEqual(self.product.metadata['income_calendar']['income_date_adjustment'], 'following_weekday')
 
 		coupon_tx = Transaction.objects.get(import_fingerprint='aigenis:op47:coupon:2026-04-08')
 		self.assertEqual(coupon_tx.amount, Decimal('13.55'))  # 2 × 6.7754
@@ -229,22 +231,57 @@ class Op51IndexedBondTests(TestCase):
 		self.assertEqual(self.product.annual_rate_pct, Decimal('7.0000'))
 		self.assertEqual(self.product.maturity_date, date(2031, 12, 15))
 		self.assertEqual(self.product.income_schedule, Product.IncomeSchedule.QUARTERLY)
-		self.assertEqual(self.product.next_income_date, date(2026, 8, 16))
+		self.assertEqual(self.product.next_income_date, date(2026, 8, 17))
 		self.assertEqual(self.product.metadata['face_value_usd'], '106.9900')
 		self.assertEqual(self.product.metadata['placement_fx_rate'], '2.8040')
 		self.assertEqual(self.product.metadata['income_calendar']['coupon_day'], 16)
+		self.assertEqual(self.product.metadata['income_calendar']['income_date_adjustment'], 'following_weekday')
 
 		dates = generate_coupon_payment_dates(self.product)
-		self.assertEqual(dates[0], date(2026, 8, 16))
+		self.assertEqual(dates[0], date(2026, 8, 17))
 		self.assertNotIn(date(2031, 11, 16), dates)
 		self.assertEqual(dates[-1], date(2031, 12, 15))
 		self.assertEqual(len(dates), 22)
 
 		rows = build_income_calendar_rows(self.product, today=date(2026, 6, 1))
+		self.assertEqual(rows[0]['date'], date(2026, 8, 17))
+		self.assertEqual(rows[0]['date_iso'], '2026-08-16')
+		self.assertEqual(rows[0]['scheduled_date'], date(2026, 8, 16))
 		self.assertEqual(rows[0]['coupon_usd_per_unit'], Decimal('2.3391'))
 		self.assertEqual(rows[0]['units'], Decimal('4'))
 		self.assertEqual(rows[-1]['coupon_usd_per_unit'], Decimal('2.4828'))
 		self.assertTrue(rows[-1]['is_maturity_coupon'])
+
+	def test_weekend_coupon_moves_to_monday_without_extra_days(self):
+		configure_op51_bond(self.product)
+		from apps.common.services.indexed_bonds import generate_coupon_schedule, planned_coupon_usd_per_unit
+		from apps.products.operations_calendar import build_operations_calendar
+		from apps.products.services.token_terms import estimate_next_income_amount, upcoming_token_income_dates
+
+		schedule = dict(generate_coupon_schedule(self.product))
+		self.assertEqual(schedule[date(2026, 8, 16)], date(2026, 8, 17))
+		self.assertEqual(schedule[date(2027, 5, 16)], date(2027, 5, 17))
+		self.assertEqual(schedule[date(2030, 2, 16)], date(2030, 2, 18))
+		self.assertEqual(schedule[date(2026, 11, 16)], date(2026, 11, 16))
+
+		self.assertEqual(planned_coupon_usd_per_unit(self.product, date(2026, 8, 17)), Decimal('2.3391'))
+		self.assertEqual(planned_coupon_usd_per_unit(self.product, date(2026, 8, 16)), Decimal('2.3391'))
+
+		forecast_dates = upcoming_token_income_dates(
+			self.product,
+			reference=date(2026, 8, 16),
+			window_end=date(2026, 10, 15),
+		)
+		self.assertEqual(forecast_dates, [date(2026, 8, 17)])
+
+		amount, amount_usd = estimate_next_income_amount(self.product, payment_date=date(2026, 8, 17))
+		self.assertEqual(amount_usd, Decimal('9.3564'))
+
+		calendar = build_operations_calendar([self.product], today=date(2026, 8, 16), future_days=60)
+		self.assertEqual([day['date'] for day in calendar], [date(2026, 8, 17)])
+		event = calendar[0]['groups'][0]['events'][0]
+		self.assertEqual(event['kind'], 'income_forecast')
+		self.assertEqual(event['amount_usd'], Decimal('9.3564'))
 
 	def test_indexed_bond_valuation_uses_op51_usd_face_value(self):
 		configure_op51_bond(self.product)

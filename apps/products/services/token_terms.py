@@ -604,6 +604,20 @@ def upcoming_token_income_dates(
 			transactions=transactions,
 		)
 
+	from apps.common.services.indexed_bonds import generate_coupon_payment_dates, get_income_calendar_config
+
+	if get_income_calendar_config(product).get('enabled'):
+		paid_dates = set(income_payment_dates(product, transactions=transactions))
+		calendar_dates = [
+			payment_date
+			for payment_date in generate_coupon_payment_dates(product)
+			if payment_date >= reference
+			and payment_date <= window_end
+			and payment_date not in paid_dates
+		]
+		if calendar_dates:
+			return calendar_dates
+
 	dates: list[date] = []
 	cursor = reference
 	for _ in range(48):
@@ -648,6 +662,14 @@ def estimate_next_income_date(
 		)
 		if scheduled is not None:
 			return scheduled
+
+	from apps.common.services.indexed_bonds import generate_coupon_payment_dates, get_income_calendar_config
+
+	if get_income_calendar_config(product).get('enabled'):
+		paid_dates = set(payment_dates)
+		for payment_date in generate_coupon_payment_dates(product):
+			if payment_date >= reference and payment_date not in paid_dates:
+				return payment_date
 
 	if not payment_dates:
 		if product.next_income_date and product.next_income_date >= reference:

@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.utils import timezone
 
 from apps.accounts.models import Transaction
+from apps.common.dates import following_weekday
 from apps.products.models import Product
 
 
@@ -79,11 +80,7 @@ def _uses_actual_day_count_forecast(product: Product) -> bool:
 
 
 def _following_weekday(value: date) -> date:
-	if value.weekday() == 5:
-		return value + timedelta(days=2)
-	if value.weekday() == 6:
-		return value + timedelta(days=1)
-	return value
+	return following_weekday(value)
 
 
 def _income_transaction_dates(
@@ -140,12 +137,121 @@ def _rolling_income_dates(
 	return dates
 
 
+def _unit_price(product: Product) -> Decimal:
+	return product.current_price or Decimal('1')
+
+
+def _quantity_deltas_between(
+	transactions: list[Transaction],
+	*,
+	start_date: date,
+	end_date: date,
+) -> list[tuple[date, Decimal]]:
+	merged: dict[date, Decimal] = {}
+	for ledger_transaction in transactions:
+		quantity = ledger_transaction.quantity or Decimal('0')
+		if quantity == 0:
+			continue
+		occurred_date = timezone.localdate(ledger_transaction.occurred_at)
+		if occurred_date <= start_date or occurred_date >= end_date:
+			continue
+		merged[occurred_date] = merged.get(occurred_date, Decimal('0')) + quantity
+	return sorted(merged.items())
+
+
+def _principal_day_weight(
+	product: Product,
+	payment_date: date,
+	*,
+	previous_payment_date: date,
+	principal: Decimal,
+	transactions: list[Transaction] | None = None,
+	as_of: date | None = None,
+) -> Decimal | None:
+	"""Sum of principal × days over actual balance segments.
+
+	Matches bank day-count: from the previous payment date through the day
+	before the next payment, including top-ups from the day they are credited.
+	"""
+	if payment_date <= previous_payment_date:
+		return None
+
+	opening = principal
+	events: list[tuple[date, Decimal]] = []
+	reference = as_of or timezone.localdate()
+	source = transactions
+	if source is None:
+		source = list(product.transactions.order_by('occurred_at', 'id'))
+	if source is not None and previous_payment_date <= reference:
+		from apps.common.services.indexed_bonds import units_held_on_date
+
+		held = units_held_on_date(product, previous_payment_date, transactions=source)
+		if held > 0:
+			opening = held * _unit_price(product)
+		events = _quantity_deltas_between(
+			source,
+			start_date=previous_payment_date,
+			end_date=payment_date,
+		)
+
+	if opening <= 0:
+		return None
+
+	weighted = Decimal('0')
+	cursor = previous_payment_date
+	balance = opening
+	price = _unit_price(product)
+	for event_date, quantity in events:
+		days = (event_date - cursor).days
+		if days > 0:
+			weighted += balance * Decimal(days)
+		balance += quantity * price
+		cursor = event_date
+	days = (payment_date - cursor).days
+	if days > 0:
+		weighted += balance * Decimal(days)
+	return weighted if weighted > 0 else None
+
+
+def _interest_from_weighted_principal(
+	product: Product,
+	weighted_principal_days: Decimal,
+) -> tuple[Decimal, Decimal | None]:
+	basis = _metadata_int(product, 'income_day_count_basis', ALFABANK_DAY_COUNT_BASIS)
+	if basis <= 0:
+		basis = ALFABANK_DAY_COUNT_BASIS
+	amount = (
+		weighted_principal_days
+		* product.annual_rate_pct
+		/ Decimal('100')
+		/ Decimal(basis)
+	).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	amount_usd = None
+	if product.current_value_usd and product.units and product.units > 0:
+		usd_per_unit = product.current_value_usd / product.units
+		price = _unit_price(product)
+		weighted_usd_days = (
+			weighted_principal_days * usd_per_unit / price if price else weighted_principal_days * usd_per_unit
+		)
+		amount_usd = (
+			weighted_usd_days
+			* product.annual_rate_pct
+			/ Decimal('100')
+			/ Decimal(basis)
+		).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	elif getattr(product, 'currency', None) is not None and product.currency.usd_rate:
+		amount_usd = (amount * product.currency.usd_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+	return amount, amount_usd
+
+
 def estimate_rolling_deposit_income_amount(
 	product: Product,
 	payment_date: date,
 	*,
 	previous_payment_date: date,
 	principal: Decimal | None = None,
+	transactions: list[Transaction] | None = None,
+	as_of: date | None = None,
 ) -> tuple[Decimal | None, Decimal | None]:
 	if not _uses_actual_day_count_forecast(product):
 		return None, None
@@ -153,34 +259,17 @@ def estimate_rolling_deposit_income_amount(
 		return None, None
 	if principal is None:
 		principal = product.market_value
-	if principal <= 0:
+	weighted = _principal_day_weight(
+		product,
+		payment_date,
+		previous_payment_date=previous_payment_date,
+		principal=principal or Decimal('0'),
+		transactions=transactions,
+		as_of=as_of,
+	)
+	if weighted is None:
 		return None, None
-	accrual_days = (payment_date - previous_payment_date).days
-	if accrual_days <= 0:
-		return None, None
-	basis = _metadata_int(product, 'income_day_count_basis', ALFABANK_DAY_COUNT_BASIS)
-	if basis <= 0:
-		basis = ALFABANK_DAY_COUNT_BASIS
-	amount = (
-		principal
-		* product.annual_rate_pct
-		/ Decimal('100')
-		* Decimal(accrual_days)
-		/ Decimal(basis)
-	).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-	amount_usd = None
-	if product.current_value_usd and product.units and product.units > 0:
-		principal_usd = product.current_value_usd * principal / product.units
-		amount_usd = (
-			principal_usd
-			* product.annual_rate_pct
-			/ Decimal('100')
-			* Decimal(accrual_days)
-			/ Decimal(basis)
-		).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-	elif getattr(product, 'currency', None) is not None and product.currency.usd_rate:
-		amount_usd = (amount * product.currency.usd_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-	return amount, amount_usd
+	return _interest_from_weighted_principal(product, weighted)
 
 
 def upcoming_deposit_income_dates(

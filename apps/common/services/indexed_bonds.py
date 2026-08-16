@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.accounts.models import Transaction
 from apps.common.models import ExchangeRateHistory
-from apps.common.dates import format_display_date
+from apps.common.dates import following_weekday, format_display_date
 from apps.common.services.aigenis_bonds import get_alfabank_byn_account
 from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.products.models import Product
@@ -49,6 +49,7 @@ OP47_METADATA = {
 		'enabled': True,
 		'coupon_day': 8,
 		'schedule_start_date': '2026-04-08',
+		'income_date_adjustment': 'following_weekday',
 		'payments': OP47_PROSPECTUS_PAYMENTS,
 	},
 }
@@ -65,7 +66,7 @@ OP51_TERMS = {
 	'annual_rate_pct': Decimal('7.0000'),
 	'maturity_date': date(2031, 12, 15),
 	'income_schedule': Product.IncomeSchedule.QUARTERLY,
-	'next_income_date': date(2026, 8, 16),
+	'next_income_date': date(2026, 8, 17),
 }
 
 OP51_PROSPECTUS_PAYMENTS = {
@@ -101,6 +102,7 @@ OP51_METADATA = {
 		'enabled': True,
 		'coupon_day': 16,
 		'schedule_start_date': '2026-08-16',
+		'income_date_adjustment': 'following_weekday',
 		'payments': OP51_PROSPECTUS_PAYMENTS,
 	},
 }
@@ -230,7 +232,17 @@ def resolve_schedule_start_date(product: Product) -> date | None:
 	return None
 
 
-def generate_coupon_payment_dates(product: Product) -> list[date]:
+def _coupon_date_adjustment(product: Product) -> str:
+	return str(get_income_calendar_config(product).get('income_date_adjustment') or '')
+
+
+def _adjust_coupon_payment_date(scheduled_date: date, adjustment: str) -> date:
+	if adjustment == 'following_weekday':
+		return following_weekday(scheduled_date)
+	return scheduled_date
+
+
+def _generate_unadjusted_coupon_dates(product: Product) -> list[date]:
 	config = get_income_calendar_config(product)
 	maturity = product.maturity_date
 	start_date = resolve_schedule_start_date(product)
@@ -239,6 +251,9 @@ def generate_coupon_payment_dates(product: Product) -> list[date]:
 
 	coupon_day = int(config.get('coupon_day') or (start_date.day if start_date else 8))
 	month_delta = schedule_month_delta(product.income_schedule or Product.IncomeSchedule.QUARTERLY) or 3
+	coupon_day_in_start_month = _date_on_day(start_date.year, start_date.month, coupon_day)
+	if following_weekday(coupon_day_in_start_month) == start_date:
+		start_date = coupon_day_in_start_month
 	dates: list[date] = []
 	candidate = _date_on_day(start_date.year, start_date.month, coupon_day)
 	if candidate < start_date:
@@ -262,15 +277,46 @@ def generate_coupon_payment_dates(product: Product) -> list[date]:
 	return dates
 
 
+def generate_coupon_schedule(product: Product) -> list[tuple[date, date]]:
+	"""Return (scheduled_date, payment_date) pairs.
+
+	Aigenis prospectuses move a weekend coupon to the next Monday, but keep the
+	scheduled day count — weekend postponement days are not extra-paid.
+	"""
+	adjustment = _coupon_date_adjustment(product)
+	return [
+		(scheduled_date, _adjust_coupon_payment_date(scheduled_date, adjustment))
+		for scheduled_date in _generate_unadjusted_coupon_dates(product)
+	]
+
+
+def generate_coupon_payment_dates(product: Product) -> list[date]:
+	return [payment_date for _, payment_date in generate_coupon_schedule(product)]
+
+
+def scheduled_coupon_date_for_payment(product: Product, payment_date: date) -> date:
+	for scheduled_date, actual_date in generate_coupon_schedule(product):
+		if actual_date == payment_date or scheduled_date == payment_date:
+			return scheduled_date
+	return payment_date
+
+
+def _coupon_amount_usd_for_date(schedule: dict[str, str], product: Product, payment_date: date) -> Decimal | None:
+	scheduled_date = scheduled_coupon_date_for_payment(product, payment_date)
+	return _parse_decimal_value(schedule.get(scheduled_date.isoformat())) or _parse_decimal_value(
+		schedule.get(payment_date.isoformat())
+	)
+
+
 def planned_coupon_usd_per_unit(product: Product, payment_date: date | None = None) -> Decimal | None:
 	schedule = get_payment_schedule(product)
 	if payment_date is not None:
-		return _parse_decimal_value(schedule.get(payment_date.isoformat()))
+		return _coupon_amount_usd_for_date(schedule, product, payment_date)
 
 	reference = timezone.localdate()
 	for payment_day in generate_coupon_payment_dates(product):
 		if payment_day >= reference:
-			amount = _parse_decimal_value(schedule.get(payment_day.isoformat()))
+			amount = _coupon_amount_usd_for_date(schedule, product, payment_day)
 			if amount is not None:
 				return amount
 
@@ -311,15 +357,16 @@ def build_income_calendar_rows(product: Product, *, today: date | None = None) -
 	schedule = get_payment_schedule(product)
 	rows: list[dict] = []
 	maturity = product.maturity_date
-	for payment_date in generate_coupon_payment_dates(product):
-		per_unit_usd = _parse_decimal_value(schedule.get(payment_date.isoformat()))
+	for scheduled_date, payment_date in generate_coupon_schedule(product):
+		per_unit_usd = _parse_decimal_value(schedule.get(scheduled_date.isoformat()))
 		held_units = units_held_on_date(product, payment_date)
 		_, total_usd, total_byn = coupon_totals_for_date(product, payment_date, units=held_units)
-		is_maturity_coupon = maturity is not None and payment_date == maturity
+		is_maturity_coupon = maturity is not None and scheduled_date == maturity
 		rows.append(
 			{
 				'date': payment_date,
-				'date_iso': payment_date.isoformat(),
+				'date_iso': scheduled_date.isoformat(),
+				'scheduled_date': scheduled_date,
 				'days_until': (payment_date - reference).days,
 				'is_past': payment_date < reference,
 				'is_forecast': payment_date >= reference,
@@ -459,6 +506,7 @@ def merge_op47_metadata(metadata: dict) -> dict:
 			**OP47_PROSPECTUS_PAYMENTS,
 			**existing_payments,
 		},
+		'income_date_adjustment': 'following_weekday',
 	}
 	merged['bond_kind'] = 'indexed'
 	return merged
@@ -485,6 +533,7 @@ def merge_op51_metadata(metadata: dict) -> dict:
 			**OP51_PROSPECTUS_PAYMENTS,
 			**existing_payments,
 		},
+		'income_date_adjustment': 'following_weekday',
 	}
 	merged['bond_kind'] = 'indexed'
 	return merged

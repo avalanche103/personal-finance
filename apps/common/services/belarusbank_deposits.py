@@ -84,18 +84,26 @@ def _parse_transactions(text: str) -> list[dict]:
 
 def _estimate_annual_rate_pct(transactions: list[dict]) -> Decimal:
 	rates: list[Decimal] = []
+	previous_date: date | None = None
 	for row in transactions:
-		if row.get('operation_kind') != 'capitalization':
+		occurred_at = datetime.fromisoformat(row['occurred_at']).date()
+		kind = row.get('operation_kind')
+		if kind in {'opening', 'top_up'} and previous_date is None:
+			previous_date = occurred_at
+		if kind != 'capitalization':
 			continue
 		amount = _to_decimal(row.get('amount'))
 		balance_after = _to_decimal(row.get('balance_after'))
 		prior_balance = balance_after - amount
-		if prior_balance <= 0:
-			continue
-		rates.append(amount / prior_balance * Decimal('12') * Decimal('100'))
+		if previous_date is not None and prior_balance > 0:
+			days = (occurred_at - previous_date).days
+			if days > 0:
+				rates.append(amount / prior_balance * Decimal('365') / Decimal(days) * Decimal('100'))
+		previous_date = occurred_at
 	if not rates:
 		return Decimal('0')
-	return sum(rates, Decimal('0')) / Decimal(len(rates))
+	recent = rates[-2:] if len(rates) >= 2 else rates
+	return (sum(recent, Decimal('0')) / Decimal(len(recent))).quantize(Decimal('0.01'))
 
 
 def _infer_income_schedule(transactions: list[dict]) -> str:
