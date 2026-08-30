@@ -1,0 +1,68 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Deposit offers | {{ project_name }}{% endblock %}
+{% block page_title %}Deposit offers{% endblock %}
+
+{% block content %}
+<section class="panel stack-md">
+    <div class="panel-header">
+        <div>
+            <p class="eyebrow">Belarus market</p>
+            <h2>Bank deposit rates</h2>
+            <p class="muted">
+                Public offers from bank websites/APIs.
+                {% if last_synced %}
+                    Last sync: <span class="font-mono">{{ last_synced|date:"Y-m-d H:i" }}</span>
+                {% else %}
+                    Not synced yet.
+                {% endif %}
+            </p>
+        </div>
+        <form method="post" action="{% url 'market:deposit_offers_refresh' %}">
+            {% csrf_token %}
+            <button class="button" type="submit">Refresh now</button>
+        </form>
+    </div>
+
+    <form class="filter-bar" hx-get="{% url 'market:deposit_offers' %}" hx-target="#deposit-offers-table" hx-trigger="change, keyup changed delay:300ms from:#offer-search">
+        <input id="offer-search" type="search" name="q" value="{{ query }}" placeholder="Search bank or product">
+        <select name="currency">
+            <option value="">All currencies</option>
+            {% for code in currencies %}
+                <option value="{{ code }}"{% if currency == code %} selected{% endif %}>{{ code }}</option>
+            {% endfor %}
+        </select>
+        <select name="bank">
+            <option value="">All banks with parsers</option>
+            {% for bank in banks %}
+                <option value="{{ bank.slug }}"{% if bank_slug == bank.slug %} selected{% endif %}>{{ bank.short_name|default:bank.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="irrevocable">
+            <option value="">Any withdrawal type</option>
+            <option value="1"{% if irrevocable == '1' %} selected{% endif %}>Irrevocable</option>
+            <option value="0"{% if irrevocable == '0' %} selected{% endif %}>Revocable</option>
+        </select>
+        <select name="term">
+            <option value="">Any term</option>
+            {% for value, label in term_filters.items %}
+                <option value="{{ value }}"{% if term == value %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </form>
+
+    <div id="deposit-offers-table">
+        {% include 'market/partials/offers_table.html' %}
+    </div>
+
+    {% if banks_without_parser_count %}
+        <p class="muted">
+            {{ banks_without_parser_count }} bank(s) from the NBRB registry have no rate parser yet
+            (shown in admin / after NBRB sync).
+        </p>
+    {% endif %}
+    <p class="muted">
+        BSB Bank rates are not available via static HTML (JS SPA). Other banks sync from their public deposit pages/APIs.
+    </p>
+</section>
+{% endblock %}

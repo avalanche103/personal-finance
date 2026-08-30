@@ -11,7 +11,7 @@ from django.utils import timezone
 from apps.accounts.models import Account, BalanceSnapshot, Transaction
 from apps.common.models import Currency
 from apps.imports.models import ImportJob, ImportSource
-from apps.imports.services.integrations.binance import BinanceApiError, BinanceClient, BinanceSymbol, decimal_from_binance
+from apps.imports.services.integrations.binance import BinanceApiError, BinanceClient, BinanceSymbol, is_binance_permission_error, decimal_from_binance
 from apps.institutions.models import FinancialInstitution
 from apps.products.models import Product
 
@@ -978,11 +978,15 @@ def sync_deposits_withdrawals(
 def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool = False) -> BinanceSyncResult:
 	client = client or BinanceClient()
 	errors: dict[str, str] = {}
+	permission_skips: dict[str, str] = {}
 	try:
 		funding_assets = client.fetch_funding_assets()
 	except BinanceApiError as exc:
 		funding_assets = []
-		errors['funding_assets'] = str(exc)
+		if is_binance_permission_error(exc):
+			permission_skips['funding_assets'] = str(exc)
+		else:
+			errors['funding_assets'] = str(exc)
 	try:
 		flexible = client.fetch_simple_earn_flexible_positions()
 	except BinanceApiError as exc:
@@ -1020,7 +1024,10 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 	rows = len(funding_assets) + len(flexible_rows) + len(locked_rows)
 	result = BinanceSyncResult(scope='earn-funding', rows_detected=rows)
 	if dry_run:
-		result.details = {'funding_assets': len(funding_assets), 'flexible_positions': len(flexible_rows), 'locked_positions': len(locked_rows), 'errors': errors}
+		details = {'funding_assets': len(funding_assets), 'flexible_positions': len(flexible_rows), 'locked_positions': len(locked_rows), 'errors': errors}
+		if permission_skips:
+			details['permission_skips'] = permission_skips
+		result.details = details
 		return result
 
 	institution, source = ensure_binance_reference_data()
@@ -1178,6 +1185,8 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 			'locked_assets_updated': len(locked_totals),
 			'errors': errors,
 		}
+		if permission_skips:
+			job.details['permission_skips'] = permission_skips
 		job.finished_at = timezone.now()
 		job.error_message = ''
 		job.save(update_fields=['status', 'rows_detected', 'records_created', 'details', 'finished_at', 'error_message', 'updated_at'])

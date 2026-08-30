@@ -221,6 +221,7 @@ def _build_product_metadata(statement: dict) -> dict:
 		'deposit_name': statement.get('deposit_name', ''),
 		'opened_at': statement.get('opened_at', ''),
 		'interest_mode': statement.get('interest_mode', 'capitalized'),
+		'income_day_count_basis': 365,
 		'as_of_date': statement.get('as_of_date', ''),
 		'initial_amount_byn': statement.get('initial_amount_byn', ''),
 		'balance_byn': statement.get('balance_byn', ''),

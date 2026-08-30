@@ -1220,6 +1220,42 @@ class DepositProductGroupTests(TestCase):
 		deposits_institution = next(row for row in allocation['by_institution'] if row['label'] == 'Deposits')
 		self.assertEqual(deposits_institution['value_usd'], Decimal('8100'))
 
+	def test_dedupe_portfolio_products_drops_debug_deposit_duplicates(self):
+		from apps.products.analytics import dedupe_portfolio_products
+		from apps.products.operations_calendar import build_operations_calendar
+
+		debug_bank = FinancialInstitution.objects.create(
+			name='Alfa Bank Calendar',
+			slug='alfabank-debug',
+			institution_type=FinancialInstitution.InstitutionType.BANK,
+		)
+		duplicate = Product.objects.create(
+			institution=debug_bank,
+			name='Alfa BYN deposit',
+			product_type=Product.ProductType.DEPOSIT,
+			currency=self.byn,
+			units=Decimal('10000'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('3100'),
+			income_schedule=Product.IncomeSchedule.MONTHLY,
+			is_active=True,
+		)
+		products = dedupe_portfolio_products([self.deposit_byn, self.deposit_usd, duplicate, self.token])
+		deposit_names = [product.name for product in products if product.product_type == Product.ProductType.DEPOSIT]
+
+		self.assertEqual(len(deposit_names), 2)
+		self.assertNotIn(duplicate.pk, {product.pk for product in products})
+
+		calendar = build_operations_calendar(products, today=date(2026, 9, 1), future_days=30)
+		alfa_events = [
+			event
+			for day in calendar
+			for group in day['groups']
+			for event in group['events']
+			if event.get('product_name') == 'Alfa BYN deposit'
+		]
+		self.assertLessEqual(len(alfa_events), 1)
+
 	def test_product_list_shows_deposits_group(self):
 		response = self.client.get(reverse('products:list'))
 

@@ -15,3 +15,9 @@ $startDate = (Get-Date).AddDays(-7).ToString('yyyy-MM-dd')
 & $python manage.py sync_binance --earn --funding --skip-missing-credentials
 & $python manage.py sync_binance --daily-snapshots --snapshot-days 30 --skip-missing-credentials
 & $python manage.py recalculate_usd_values
+
+# Deposit market catalog: refresh once a week (Monday).
+if ((Get-Date).DayOfWeek -eq 'Monday') {
+	& $python manage.py sync_nbrb_banks
+	& $python manage.py sync_deposit_offers
+}

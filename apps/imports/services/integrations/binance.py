@@ -31,6 +31,10 @@ class BinanceApiError(RuntimeError):
 	pass
 
 
+def is_binance_permission_error(exc: BinanceApiError) -> bool:
+	return '-1002:' in str(exc)
+
+
 class BinanceClient(BaseApiClient):
 	source_code = 'binance-api'
 
@@ -45,6 +49,21 @@ class BinanceClient(BaseApiClient):
 		self.api_secret = api_secret if api_secret is not None else getattr(settings, 'BINANCE_API_SECRET', '')
 		self.base_url = (base_url if base_url is not None else getattr(settings, 'BINANCE_API_BASE_URL', DEFAULT_BINANCE_API_BASE_URL)).rstrip('/')
 		self.timeout = timeout
+		self._time_offset_ms = 0
+		self._server_time_synced = False
+
+	def sync_server_time(self) -> int:
+		payload = self._request('GET', '/api/v3/time')
+		server_time = int(payload['serverTime'])
+		local_time = int(time.time() * 1000)
+		self._time_offset_ms = server_time - local_time
+		self._server_time_synced = True
+		return self._time_offset_ms
+
+	def _signed_timestamp_ms(self) -> int:
+		if not self._server_time_synced:
+			self.sync_server_time()
+		return int(time.time() * 1000) + self._time_offset_ms
 
 	def _headers(self, signed: bool) -> dict[str, str]:
 		headers = {'Content-Type': 'application/json'}
@@ -95,29 +114,44 @@ class BinanceClient(BaseApiClient):
 		*,
 		signed: bool = False,
 	) -> Any:
-		params = {key: value for key, value in (params or {}).items() if value is not None}
-		if signed:
-			params.setdefault('recvWindow', DEFAULT_RECV_WINDOW_MS)
-			params.setdefault('timestamp', int(time.time() * 1000))
-			query_string = urlencode(params, doseq=True)
-			params['signature'] = self._signature(query_string)
-		query_string = urlencode(params, doseq=True)
-		url = f'{self.base_url}/{path.lstrip("/")}'
-		data = None
-		if method.upper() == 'GET':
-			if query_string:
-				url = f'{url}?{query_string}'
-		else:
-			data = query_string.encode('utf-8')
+		base_params = {key: value for key, value in (params or {}).items() if value is not None}
+		attempts = 2 if signed else 1
+		last_error: BinanceApiError | None = None
 
-		request = Request(url, data=data, headers=self._headers(signed), method=method.upper())
-		try:
-			with urlopen(request, timeout=self.timeout) as response:
-				raw_body = response.read().decode('utf-8')
-		except Exception as exc:  # pragma: no cover - urllib exceptions vary by platform
-			raise BinanceApiError(self._format_request_error(exc)) from exc
+		for attempt in range(attempts):
+			request_params = dict(base_params)
+			if signed:
+				if attempt > 0:
+					self.sync_server_time()
+				request_params.setdefault('recvWindow', DEFAULT_RECV_WINDOW_MS)
+				request_params['timestamp'] = self._signed_timestamp_ms()
+				query_string = urlencode(request_params, doseq=True)
+				request_params['signature'] = self._signature(query_string)
+			query_string = urlencode(request_params, doseq=True)
+			url = f'{self.base_url}/{path.lstrip("/")}'
+			data = None
+			if method.upper() == 'GET':
+				if query_string:
+					url = f'{url}?{query_string}'
+			else:
+				data = query_string.encode('utf-8')
 
-		return json.loads(raw_body) if raw_body else {}
+			request = Request(url, data=data, headers=self._headers(signed), method=method.upper())
+			try:
+				with urlopen(request, timeout=self.timeout) as response:
+					raw_body = response.read().decode('utf-8')
+			except Exception as exc:  # pragma: no cover - urllib exceptions vary by platform
+				formatted = self._format_request_error(exc)
+				if signed and attempt == 0 and '-1021:' in formatted:
+					last_error = BinanceApiError(formatted)
+					continue
+				raise BinanceApiError(formatted) from exc
+
+			return json.loads(raw_body) if raw_body else {}
+
+		if last_error is not None:
+			raise last_error
+		return {}
 
 	def fetch_exchange_info(self, symbols: list[str] | None = None) -> dict:
 		params = {'symbols': json.dumps(symbols)} if symbols else None

@@ -170,10 +170,15 @@ def _principal_day_weight(
 ) -> Decimal | None:
 	"""Sum of principal × days over actual balance segments.
 
-	Matches bank day-count: from the previous payment date through the day
-	before the next payment, including top-ups from the day they are credited.
+	Bank day-count: accrual starts the day after the previous payment and ends
+	the day before the next payment, including top-ups from the day credited.
 	"""
 	if payment_date <= previous_payment_date:
+		return None
+
+	accrual_start = previous_payment_date + timedelta(days=1)
+	accrual_end = payment_date - timedelta(days=1)
+	if accrual_end < accrual_start:
 		return None
 
 	opening = principal
@@ -198,18 +203,26 @@ def _principal_day_weight(
 		return None
 
 	weighted = Decimal('0')
-	cursor = previous_payment_date
+	cursor = accrual_start
 	balance = opening
 	price = _unit_price(product)
 	for event_date, quantity in events:
-		days = (event_date - cursor).days
+		if event_date >= payment_date:
+			continue
+		effective_start = max(event_date, accrual_start)
+		if effective_start > accrual_end:
+			balance += quantity * price
+			continue
+		if effective_start > cursor:
+			days = (effective_start - cursor).days
+			if days > 0:
+				weighted += balance * Decimal(days)
+			cursor = effective_start
+		balance += quantity * price
+	if cursor <= accrual_end:
+		days = (accrual_end - cursor).days + 1
 		if days > 0:
 			weighted += balance * Decimal(days)
-		balance += quantity * price
-		cursor = event_date
-	days = (payment_date - cursor).days
-	if days > 0:
-		weighted += balance * Decimal(days)
 	return weighted if weighted > 0 else None
 
 

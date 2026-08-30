@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import defaultdict
-from datetime import date, datetime, time
-from decimal import Decimal
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 from django.db import transaction
@@ -272,6 +272,73 @@ def compute_priorlife_balances(
 
 def _yield_accrual_date(year: int, month: int) -> date:
 	return date(year, month, YIELD_ACCRUAL_DAY)
+
+
+def is_priorlife_product(product: Product) -> bool:
+	return (
+		product.product_type == Product.ProductType.LIFE_INSURANCE
+		and getattr(getattr(product, 'institution', None), 'slug', '') == PRIORLIFE_SLUG
+	)
+
+
+def estimate_priorlife_next_income_date(
+	product: Product,
+	*,
+	today: date | None = None,
+	transactions: list[Transaction] | None = None,
+) -> date | None:
+	if not is_priorlife_product(product):
+		return None
+
+	reference = today or timezone.localdate()
+	from apps.products.services.token_terms import income_payment_dates
+
+	payment_dates = income_payment_dates(product, transactions=transactions)
+	if payment_dates:
+		last_payment = payment_dates[-1]
+		candidate = date(last_payment.year + 1, last_payment.month, YIELD_ACCRUAL_DAY)
+		while candidate < reference:
+			candidate = date(candidate.year + 1, candidate.month, YIELD_ACCRUAL_DAY)
+		return candidate
+
+	if reference.month < 8 or (reference.month == 8 and reference.day <= YIELD_ACCRUAL_DAY):
+		return date(reference.year, 8, YIELD_ACCRUAL_DAY)
+	return date(reference.year + 1, 8, YIELD_ACCRUAL_DAY)
+
+
+def estimate_priorlife_yield_accrual_amount(
+	product: Product,
+	payment_date: date,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> tuple[Decimal | None, Decimal | None]:
+	if not is_priorlife_product(product):
+		return None, None
+
+	from apps.products.services.token_terms import recent_income_transactions
+
+	recent = recent_income_transactions(
+		product,
+		limit=2,
+		before=payment_date + timedelta(days=1),
+		transactions=transactions,
+	)
+	if not recent:
+		return None, None
+
+	latest = recent[0]
+	latest_amount = latest.amount
+	if latest_amount is None:
+		return None, None
+
+	if len(recent) >= 2:
+		previous_amount = recent[1].amount or Decimal('0')
+		if previous_amount > 0:
+			growth = latest_amount / previous_amount
+			projected = (latest_amount * growth).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+			return projected, latest.amount_usd
+
+	return latest_amount, latest.amount_usd
 
 
 def spread_yield_by_contribution_months(
@@ -702,7 +769,9 @@ def persist_priorlife_contributions(
 	if guaranteed_yield not in (None, ''):
 		product.annual_rate_pct = _to_decimal(guaranteed_yield)
 	if premium_schedule:
-		product.income_schedule = premium_schedule
+		product.income_schedule = Product.IncomeSchedule.ANNUAL
+	product.next_income_date = estimate_priorlife_next_income_date(product, today=as_of_date)
+	metadata['yield_accrual_day'] = YIELD_ACCRUAL_DAY
 	metadata['accumulated_amount'] = str(accumulated_amount)
 	product.metadata = metadata
 	product.save(
@@ -716,6 +785,7 @@ def persist_priorlife_contributions(
 			'maturity_date',
 			'annual_rate_pct',
 			'income_schedule',
+			'next_income_date',
 			'metadata',
 			'updated_at',
 		]

@@ -179,8 +179,26 @@ def build_operations_calendar(
     for product in products:
         if not product.is_active:
             continue
-        if product.product_type not in (Product.ProductType.TOKEN, Product.ProductType.BOND, Product.ProductType.DEPOSIT):
+        if (
+            (product.units or Decimal('0')) <= 0
+            and product.product_type == Product.ProductType.TOKEN
+            and product.maturity_date is not None
+            and product.maturity_date < reference
+        ):
             continue
+        if product.product_type not in (
+            Product.ProductType.TOKEN,
+            Product.ProductType.BOND,
+            Product.ProductType.DEPOSIT,
+            Product.ProductType.LIFE_INSURANCE,
+        ):
+            continue
+
+        if product.product_type == Product.ProductType.LIFE_INSURANCE:
+            from apps.common.services.priorlife_insurance import is_priorlife_product
+
+            if not is_priorlife_product(product):
+                continue
 
         product_transactions = None
         if transaction_map is not None:

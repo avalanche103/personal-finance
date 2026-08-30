@@ -1,0 +1,50 @@
+{
+  "2036": {
+    "vklad_id": "2036",
+    "vklad_name": "«Правильный выбор» (отзывный)",
+    "vklad_val": "BYN (&#xe701),BYN (&#xe701)",
+    "vklad_procent": "0.75",
+    "vklad_procent_formula": "[#REF#- 8.5]",
+    "vklad_kapital": "",
+    "vklad_minimal": 100,
+    "vklad_srok": "",
+    "vklad_srok_type": "",
+    "vklad_srok_text": "6 месяцев",
+    "vklad_dop_dohod": "",
+    "vklad_info": "",
+    "vklad_info_dohod": "",
+    "vklad_info_preimuchestvo": ""
+  },
+  "6037": {
+    "vklad_id": "6037",
+    "vklad_name": "«Правильный выбор» (безотзывный)",
+    "vklad_val": "BYN (&#xe701),BYN (&#xe701),BYN (&#xe701)",
+    "vklad_procent": "до 14.45",
+    "vklad_procent_formula": "до [#REF+5.2#]",
+    "vklad_kapital": "",
+    "vklad_minimal": 100,
+    "vklad_srok": "",
+    "vklad_srok_type": "",
+    "vklad_srok_text": "от 45 дней до 60 месяцев",
+    "vklad_dop_dohod": "",
+    "vklad_info": "",
+    "vklad_info_dohod": "",
+    "vklad_info_preimuchestvo": ""
+  },
+  "6079": {
+    "vklad_id": "6079",
+    "vklad_name": "«Большие возможности» (безотзывный) в долларах США",
+    "vklad_val": "USD,USD,USD",
+    "vklad_procent": "до 0.01%",
+    "vklad_procent_formula": "до 0.01%",
+    "vklad_kapital": "",
+    "vklad_minimal": 0,
+    "vklad_srok": "",
+    "vklad_srok_type": "",
+    "vklad_srok_text": "от 13 до 36 месяцев",
+    "vklad_dop_dohod": "",
+    "vklad_info": "",
+    "vklad_info_dohod": "",
+    "vklad_info_preimuchestvo": ""
+  }
+}

@@ -115,11 +115,35 @@ class BinanceClientTests(TestCase):
 		client = BinanceClient(api_key='key', api_secret='secret', base_url='https://example.test')
 
 		with patch('apps.imports.services.integrations.binance.urlopen') as urlopen:
-			urlopen.return_value.__enter__.return_value.read.return_value = b'{"makerCommission":0}'
+			urlopen.return_value.__enter__.return_value.read.side_effect = [
+				b'{"serverTime":1000}',
+				b'{"makerCommission":0}',
+			]
 			client.fetch_account()
 
 		request = urlopen.call_args.args[0]
 		self.assertIn('recvWindow=5000', request.full_url)
+		self.assertIn('timestamp=1000', request.full_url)
+
+	def test_signed_request_retries_after_timestamp_error(self):
+		client = BinanceClient(api_key='key', api_secret='secret', base_url='https://example.test')
+		client._time_offset_ms = 0
+		client._server_time_synced = True
+		timestamp_error = HTTPError(
+			'https://example.test/api/v3/account',
+			400,
+			'Bad Request',
+			{},
+			BytesIO(b'{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'),
+		)
+
+		with patch('apps.imports.services.integrations.binance.urlopen') as urlopen, patch.object(client, 'sync_server_time', return_value=6000) as sync_time:
+			urlopen.side_effect = [timestamp_error, urlopen.return_value]
+			urlopen.return_value.__enter__.return_value.read.return_value = b'{"makerCommission":0}'
+			client.fetch_account()
+
+		sync_time.assert_called_once()
+		self.assertEqual(urlopen.call_count, 2)
 
 	def test_normalizes_binance_wrapper_assets(self):
 		self.assertEqual(normalize_binance_asset('RWUSD'), 'RWUSD')
@@ -175,11 +199,26 @@ class BinanceSyncTests(TestCase):
 		result = sync_earn_and_funding(client=FakeBinanceClient())
 
 		self.assertEqual(result.rows_detected, 4)
+		self.assertEqual(result.details.get('errors'), {})
+		self.assertNotIn('permission_skips', result.details)
 		institution = FinancialInstitution.objects.get(slug='binance')
 		self.assertTrue(Account.objects.filter(institution=institution, external_id='binance:funding:USDT').exists())
 		self.assertFalse(Product.objects.filter(institution=institution, external_id='binance:spot:USDC').exists())
 		self.assertFalse(Product.objects.filter(institution=institution, external_id='binance:earn_flexible:BTC').exists())
 		self.assertEqual(str(Product.objects.get(institution=institution, external_id='binance:spot:BTC').units), '0.600000')
+		self.assertTrue(Product.objects.filter(institution=institution, external_id='binance:earn_locked:ETH').exists())
+
+	def test_earn_and_funding_skips_funding_permission_error(self):
+		class FundingPermissionDeniedClient(FakeBinanceClient):
+			def fetch_funding_assets(self):
+				raise BinanceApiError('Binance API error -1002: You are not authorized to execute this request.')
+
+		sync_spot_balances(client=FakeBinanceClient(), create_snapshots=True)
+		result = sync_earn_and_funding(client=FundingPermissionDeniedClient())
+
+		self.assertEqual(result.details.get('errors'), {})
+		self.assertIn('funding_assets', result.details.get('permission_skips', {}))
+		institution = FinancialInstitution.objects.get(slug='binance')
 		self.assertTrue(Product.objects.filter(institution=institution, external_id='binance:earn_locked:ETH').exists())
 
 	def test_earn_locked_products_deactivated_when_missing_from_api(self):

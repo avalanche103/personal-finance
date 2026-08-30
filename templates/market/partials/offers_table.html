@@ -1,0 +1,45 @@
+<div class="table-wrap">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Bank</th>
+                <th>Product</th>
+                <th>Currency</th>
+                <th>Rate</th>
+                <th>Term</th>
+                <th>Min amount</th>
+                <th>Type</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for offer in offers %}
+                <tr>
+                    <td>{{ offer.bank.short_name|default:offer.bank.name }}</td>
+                    <td>{{ offer.name }}</td>
+                    <td class="font-mono">{{ offer.currency }}</td>
+                    <td class="font-mono">{{ offer.display_rate }}</td>
+                    <td>{{ offer.term_text|default:"—" }}</td>
+                    <td class="font-mono">
+                        {% if offer.min_amount %}{{ offer.min_amount }}{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if offer.is_irrevocable == True %}Irrevocable
+                        {% elif offer.is_irrevocable == False %}Revocable
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if offer.source_url %}
+                            <a href="{{ offer.source_url }}" target="_blank" rel="noopener noreferrer">Source</a>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="8">No deposit offers yet. Click “Refresh now” to sync.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<p class="muted">Showing {{ offers_count }} offer(s).</p>

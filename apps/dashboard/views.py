@@ -25,6 +25,7 @@ from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import (
     build_product_groups,
     build_product_transaction_map,
+    dedupe_portfolio_products,
     is_deposit_group_key,
     product_group_key,
     product_group_label,
@@ -82,6 +83,7 @@ class PortfolioHistoryCache:
             if is_portfolio_holding_account(account)
         ]
         products = list(Product.objects.select_related('institution', 'currency').all())
+        products = dedupe_portfolio_products(products)
         product_ids = [product.id for product in products]
         account_ids = [account.id for account in accounts]
 

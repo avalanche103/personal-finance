@@ -18,6 +18,7 @@ from apps.products.analytics import (
     build_product_performance_summary,
     build_product_position_summary,
     build_product_transaction_map,
+    dedupe_portfolio_products,
 )
 from apps.common.services.indexed_bonds import (
     build_income_calendar_rows,
@@ -123,6 +124,7 @@ def _product_list_queryset(request, *, ensure_product: Product | None = None):
 def _ordered_products_for_navigation(request, *, ensure_product: Product | None = None) -> list[Product]:
     sort_field, sort_dir = _resolve_product_sort(request)
     products = list(_product_list_queryset(request, ensure_product=ensure_product))
+    products = dedupe_portfolio_products(products)
     transaction_map = build_product_transaction_map([product.id for product in products])
     product_groups = build_product_groups(
         products,
@@ -164,7 +166,7 @@ def product_list(request):
     query = request.GET.get('q', '').strip()
     show_closed = request.GET.get('show_closed') == '1'
     sort_field, sort_dir = _resolve_product_sort(request)
-    ordered_products = list(_product_list_queryset(request))
+    ordered_products = dedupe_portfolio_products(list(_product_list_queryset(request)))
     allocation_type_choices = allocation_instrument_choices(ordered_products)
     available_allocation_types = {value for value, _label in allocation_type_choices}
     allocation_type = _resolve_allocation_type(request, valid_types=available_allocation_types)

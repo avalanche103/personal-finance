@@ -283,12 +283,20 @@ def estimate_next_income_amount(
 ) -> tuple[Decimal | None, Decimal | None]:
 	"""Coupon per period. Returns (native, usd)."""
 	from apps.common.services.finstore_income import estimate_finstore_income_amount, is_finstore_token
-	from apps.common.services.indexed_bonds import latest_usd_byn_rate, planned_coupon_usd_per_unit, units_held_on_date
+	from apps.common.services.indexed_bonds import coupon_totals_for_date, units_held_on_date
+	from apps.common.services.priorlife_insurance import estimate_priorlife_yield_accrual_amount, is_priorlife_product
 
 	payment_dates = payment_dates if payment_dates is not None else income_payment_dates(product, transactions=transactions)
 	target_date = payment_date or product.next_income_date
 	if target_date is None:
 		target_date = estimate_next_income_date(product, today=today, transactions=transactions)
+
+	if is_priorlife_product(product) and target_date is not None:
+		return estimate_priorlife_yield_accrual_amount(
+			product,
+			target_date,
+			transactions=transactions,
+		)
 
 	if is_finstore_token(product) and target_date is not None:
 		finstore_native, finstore_usd = estimate_finstore_income_amount(
@@ -300,24 +308,13 @@ def estimate_next_income_amount(
 		if finstore_native is not None:
 			return finstore_native, finstore_usd
 
-	planned_usd = planned_coupon_usd_per_unit(product, target_date)
-	if planned_usd is not None:
-		held_units = units_held_on_date(
+	if target_date is not None:
+		per_unit_usd, total_usd, total_byn = coupon_totals_for_date(
 			product,
-			target_date or timezone.localdate(),
-			transactions=transactions,
+			target_date,
 		)
-		if held_units <= 0:
-			held_units = product.units or Decimal('0')
-		if held_units > 0:
-			amount_usd = (planned_usd * held_units).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
-			usd_byn_rate = latest_usd_byn_rate()
-			if usd_byn_rate is None and isinstance(product.metadata, dict):
-				usd_byn_rate = _parse_decimal(str(product.metadata.get('placement_fx_rate', '')))
-			amount_native = None
-			if usd_byn_rate:
-				amount_native = (amount_usd * usd_byn_rate).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
-			return amount_native, amount_usd
+		if per_unit_usd is not None and (total_usd is not None or total_byn is not None):
+			return total_byn, total_usd
 
 	median_native, median_usd = median_recent_income_amount(
 		product,
@@ -642,6 +639,11 @@ def estimate_next_income_date(
 	transactions: list[Transaction] | None = None,
 ) -> date | None:
 	reference = today or timezone.localdate()
+	from apps.common.services.priorlife_insurance import estimate_priorlife_next_income_date, is_priorlife_product
+
+	if is_priorlife_product(product):
+		return estimate_priorlife_next_income_date(product, today=reference, transactions=transactions)
+
 	payment_dates = income_payment_dates(product, transactions=transactions)
 
 	if product.income_schedule == Product.IncomeSchedule.AT_MATURITY:
@@ -715,24 +717,42 @@ def recompute_next_income_dates(
 	product_ids: list[int] | None = None,
 	today: date | None = None,
 ) -> int:
-	queryset = Product.objects.filter(is_active=True, product_type=Product.ProductType.TOKEN)
+	queryset = Product.objects.filter(is_active=True).filter(
+		product_type__in=[
+			Product.ProductType.TOKEN,
+			Product.ProductType.LIFE_INSURANCE,
+		]
+	)
 	if institution is not None:
 		queryset = queryset.filter(institution=institution)
 	if product_ids:
 		queryset = queryset.filter(pk__in=product_ids)
 
 	updated = 0
-	for product in queryset:
+	reference = today or timezone.localdate()
+	for product in queryset.select_related('institution'):
+		from apps.common.services.priorlife_insurance import is_priorlife_product
+
+		if product.product_type == Product.ProductType.TOKEN and (product.units or Decimal('0')) <= 0:
+			if product.maturity_date and product.maturity_date < reference:
+				if overwrite and product.next_income_date is not None:
+					product.next_income_date = None
+					product.is_active = False
+					product.save(update_fields=['next_income_date', 'is_active', 'updated_at'])
+					updated += 1
+				continue
+
 		payment_dates = income_payment_dates(product)
-		if not payment_dates and not product.income_schedule:
+		if not payment_dates and not product.income_schedule and not is_priorlife_product(product):
 			continue
 
-		maybe_update_income_schedule_from_history(product, payment_dates)
+		if not is_priorlife_product(product):
+			maybe_update_income_schedule_from_history(product, payment_dates)
 
 		if product.next_income_date and not overwrite:
 			continue
 
-		estimated = estimate_next_income_date(product, today=today)
+		estimated = estimate_next_income_date(product, today=reference)
 		if estimated is None:
 			if overwrite and product.next_income_date is not None:
 				product.next_income_date = None

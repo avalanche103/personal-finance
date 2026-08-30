@@ -21,6 +21,62 @@ TOKEN_ISSUER_ALT_PATTERN = re.compile(
 
 DEPOSIT_GROUP_PREFIX = '__deposits__'
 DEPOSIT_GROUP_LABEL = 'Deposits'
+TEST_INSTITUTION_SLUG_MARKERS = ('-debug', '-calendar-bank', '-forecast-bank', '-maturity')
+
+
+def is_test_institution(institution) -> bool:
+	slug = getattr(institution, 'slug', '') or ''
+	return any(marker in slug for marker in TEST_INSTITUTION_SLUG_MARKERS)
+
+
+def _deposit_institution_slug(product: Product) -> str:
+	slug = getattr(getattr(product, 'institution', None), 'slug', '') or ''
+	for marker in TEST_INSTITUTION_SLUG_MARKERS:
+		if marker in slug:
+			return slug.split(marker)[0]
+	return slug
+
+
+def deposit_dedupe_key(product: Product) -> str:
+	metadata = product.metadata if isinstance(product.metadata, dict) else {}
+	contract = str(metadata.get('contract_number') or metadata.get('deposit_account') or '').strip()
+	if contract:
+		return contract.casefold()
+	external_id = str(product.external_id or '').strip()
+	if external_id:
+		return external_id.casefold()
+	return f'{_deposit_institution_slug(product)}:{product.name.casefold()}'
+
+
+def _deposit_product_rank(product: Product) -> tuple:
+	metadata = product.metadata if isinstance(product.metadata, dict) else {}
+	return (
+		is_test_institution(product.institution),
+		not bool(str(product.external_id or '').strip()),
+		not bool(str(metadata.get('contract_number') or metadata.get('deposit_account') or '').strip()),
+		getattr(product.institution, 'slug', '') or '',
+		product.pk or 0,
+	)
+
+
+def dedupe_portfolio_products(products: list[Product]) -> list[Product]:
+	"""Drop test deposits and keep one row per real contract/name."""
+	selected_deposits: dict[str, Product] = {}
+	others: list[Product] = []
+
+	for product in products:
+		if is_test_institution(product.institution):
+			continue
+		if product.product_type != Product.ProductType.DEPOSIT:
+			others.append(product)
+			continue
+
+		key = deposit_dedupe_key(product)
+		existing = selected_deposits.get(key)
+		if existing is None or _deposit_product_rank(product) < _deposit_product_rank(existing):
+			selected_deposits[key] = product
+
+	return others + list(selected_deposits.values())
 
 
 def is_deposit_group_key(group_key: tuple[str, str]) -> bool:
