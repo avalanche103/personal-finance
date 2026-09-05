@@ -13,10 +13,11 @@ from statistics import median
 from django.utils import timezone
 
 from apps.accounts.models import Transaction
+from apps.common.services.finstore_operations import is_finstore_income_operation
 from apps.institutions.models import FinancialInstitution
 from apps.products.models import Product
 
-FINSTORE_INCOME_OPERATION = 'Получение дохода'
+FINSTORE_INCOME_OPERATION = 'Получение дохода'  # kept for backward-compatible imports/tests
 
 INCOME_SCHEDULE_ALIASES = {
 	'twice_monthly': Product.IncomeSchedule.TWICE_MONTHLY,
@@ -400,7 +401,7 @@ def estimate_next_income_amount(
 def is_income_transaction(transaction: Transaction) -> bool:
 	metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
 	operation_type = metadata.get('operation_type', '')
-	if operation_type == FINSTORE_INCOME_OPERATION:
+	if is_finstore_income_operation(operation_type):
 		return True
 	# Capitalized deposit interest stores quantity for units, but is still an income payment.
 	if metadata.get('operation_kind') == 'capitalization':

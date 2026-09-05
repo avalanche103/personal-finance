@@ -7,7 +7,11 @@ from django.db import transaction
 from apps.accounts.models import Transaction
 from apps.common.models import Currency
 from apps.common.services.exchange_rates import recalculate_usd_valuations
-from apps.common.services.finstore_operations import is_finstore_redemption_operation
+from apps.common.services.finstore_operations import (
+    is_finstore_income_operation,
+    is_finstore_position_operation,
+    is_finstore_redemption_operation,
+)
 from apps.products.models import Product
 
 
@@ -81,7 +85,18 @@ def reconcile_finstore_products(institution_id: int | None = None, token_names: 
                 linked_transactions += 1
 
             operation_type = tx.metadata.get('operation_type', '') if isinstance(tx.metadata, dict) else ''
-            if is_finstore_redemption_operation(operation_type):
+            if is_finstore_income_operation(operation_type):
+                update_fields = ['updated_at']
+                if (tx.quantity or Decimal('0')) != 0:
+                    tx.quantity = Decimal('0')
+                    update_fields.append('quantity')
+                if tx.transaction_type != Transaction.TransactionType.INCOME:
+                    tx.transaction_type = Transaction.TransactionType.INCOME
+                    update_fields.append('transaction_type')
+                if len(update_fields) > 1:
+                    tx.save(update_fields=update_fields)
+                    normalized_transactions += 1
+            elif is_finstore_redemption_operation(operation_type):
                 update_fields = ['updated_at']
                 if (tx.quantity or Decimal('0')) > 0:
                     tx.quantity = -abs(tx.quantity)
@@ -106,7 +121,12 @@ def reconcile_finstore_products(institution_id: int | None = None, token_names: 
         finstore_products = finstore_products.select_related('currency', 'institution')
         for product in finstore_products:
             product_transactions = grouped_transactions.get(product.id, [])
-            units = sum((tx.quantity or Decimal('0')) for tx in product_transactions)
+            units = Decimal('0')
+            for tx in product_transactions:
+                operation_type = tx.metadata.get('operation_type', '') if isinstance(tx.metadata, dict) else ''
+                if not is_finstore_position_operation(operation_type):
+                    continue
+                units += tx.quantity or Decimal('0')
             latest_price = product.current_price or Decimal('0')
             operation_types = set()
             first_operation_at = ''
@@ -122,7 +142,12 @@ def reconcile_finstore_products(institution_id: int | None = None, token_names: 
                     first_operation_at = occurred_at
                 if occurred_at and (not last_operation_at or occurred_at > last_operation_at):
                     last_operation_at = occurred_at
-                if (tx.quantity or Decimal('0')) > 0 and occurred_at and (not latest_price_at or occurred_at >= latest_price_at):
+                if (
+                    is_finstore_position_operation(operation_type)
+                    and (tx.quantity or Decimal('0')) > 0
+                    and occurred_at
+                    and (not latest_price_at or occurred_at >= latest_price_at)
+                ):
                     latest_price = tx.unit_price or latest_price
                     latest_price_at = occurred_at
 
@@ -141,8 +166,13 @@ def reconcile_finstore_products(institution_id: int | None = None, token_names: 
             product.units = normalized_units
             product.current_price = latest_price
             product.is_active = normalized_units > 0
+            if normalized_units <= 0:
+                product.next_income_date = None
             product.metadata = metadata
-            product.save(update_fields=['units', 'current_price', 'is_active', 'metadata', 'updated_at'])
+            update_fields = ['units', 'current_price', 'is_active', 'metadata', 'updated_at']
+            if normalized_units <= 0:
+                update_fields.append('next_income_date')
+            product.save(update_fields=update_fields)
             updated_products += 1
 
     recalculate_usd_valuations()

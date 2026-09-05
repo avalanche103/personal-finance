@@ -212,6 +212,40 @@ class ImportPipelineSmokeTests(TestCase):
 		self.assertEqual(str(redemption.amount), '50.00')
 		self.assertEqual(str(redemption.quantity), '-1.000000')
 
+	def test_finstore_accrued_income_row_does_not_inflate_units(self):
+		source = ImportSource.objects.get(code='finstore-history')
+		workbook = BytesIO()
+		pd.DataFrame(
+			[
+				['История операций', '', '', '', ''],
+				['Вид операции', 'Название токена', 'Количество токенов', 'Сумма валюты', 'Дата'],
+				['Пополнение кошелька', '', '', '100 BYN.sc', '01.01.2025 10:00:00'],
+				['Покупка токенов', 'FINMEH_(BYN_592)', '5', '100 BYN.sc', '01.01.2025 11:00:00'],
+				['Начисление дохода', 'FINMEH_(BYN_592)', '1.94', '1.94 BYN.sc', '03.09.2026 10:00:00'],
+				['Досрочное погашение токенов', 'FINMEH_(BYN_592)', '5', '100 BYN.sc', '03.09.2026 10:05:00'],
+			]
+		).to_excel(workbook, index=False, header=False)
+		workbook.seek(0)
+
+		upload = SimpleUploadedFile(
+			'Finstore_maturity_income.xlsx',
+			workbook.getvalue(),
+			content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		)
+
+		job, created = process_uploaded_import(source, upload)
+		self.assertTrue(created)
+		self.assertEqual(job.status, ImportJob.Status.SAVED)
+
+		product = Product.objects.get(institution=source.institution, external_id='FINMEH_(BYN_592)')
+		self.assertEqual(str(product.units), '0.000000')
+		self.assertFalse(product.is_active)
+
+		income = Transaction.objects.get(import_job=job, metadata__operation_type='Начисление дохода')
+		self.assertEqual(income.transaction_type, Transaction.TransactionType.INCOME)
+		self.assertEqual(str(income.amount), '1.94')
+		self.assertEqual(str(income.quantity), '0.000000')
+
 	def test_finstore_clipboard_import_creates_income_transactions(self):
 		source = ImportSource.objects.get(code='finstore-history')
 		clipboard_text = (
@@ -241,6 +275,42 @@ class ImportPipelineSmokeTests(TestCase):
 		products = Product.objects.filter(institution=source.institution, external_id__in=['POLESIE_(USD_676)', 'POLESIE_(USD_626)', 'SMART_(BYN_804)']).order_by('external_id')
 		self.assertEqual(products.count(), 3)
 		self.assertTrue(all(str(product.units) == '0.000000' for product in products))
+
+	def test_finstore_reimport_with_extra_rows_skips_overlapping_operations(self):
+		source = ImportSource.objects.get(code='finstore-history')
+		partial = (
+			'Покупка токенов\tDEDUP_(BYN_101)\t1\t10 BYN.sc\t05.09.2026 08:11:32\t\n'
+			'Получение дохода\tDEDUP_(BYN_101)\t\t0.74 BYN.sc\t05.09.2026 03:42:50\t\n'
+		)
+		expanded = (
+			partial
+			+ 'Получение дохода\tDEDUP_(BYN_202)\t\t1.87 BYN.sc\t05.09.2026 03:42:32\t\n'
+		)
+
+		first_job, first_created = process_clipboard_import(source, partial)
+		self.assertTrue(first_created)
+		self.assertEqual(first_job.status, ImportJob.Status.SAVED)
+		self.assertEqual(Transaction.objects.filter(import_job=first_job).count(), 2)
+
+		second_job, second_created = process_clipboard_import(source, expanded)
+		self.assertTrue(second_created)
+		self.assertEqual(second_job.status, ImportJob.Status.SAVED)
+		self.assertEqual(second_job.details['metadata']['transactions_created'], 1)
+
+		product = Product.objects.get(institution=source.institution, external_id='DEDUP_(BYN_101)')
+		self.assertEqual(str(product.units), '1.000000')
+		buys = Transaction.objects.filter(
+			product=product,
+			transaction_type=Transaction.TransactionType.TRADE,
+			metadata__operation_type='Покупка токенов',
+		)
+		self.assertEqual(buys.count(), 1)
+		incomes = Transaction.objects.filter(
+			metadata__imported_from='finstore-history',
+			metadata__token_name__in=['DEDUP_(BYN_101)', 'DEDUP_(BYN_202)'],
+			transaction_type=Transaction.TransactionType.INCOME,
+		)
+		self.assertEqual(incomes.count(), 2)
 
 	def test_import_upload_view_accepts_finstore_clipboard_text(self):
 		source = ImportSource.objects.get(code='finstore-history')

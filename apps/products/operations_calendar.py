@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from apps.common.services.finstore_income import (
     estimate_finstore_redemption_income_amount,
+    has_finstore_redemption_on_or_before,
     is_finstore_token,
 )
 from apps.common.services.indexed_bonds import units_held_on_date
@@ -38,6 +39,17 @@ def _maturity_in_window(product: Product, *, reference: date, window_end: date) 
         return False
     return (product.units or Decimal('0')) > 0
 
+
+def _token_already_redeemed(
+    product: Product,
+    *,
+    reference: date,
+    transactions: list | None = None,
+) -> bool:
+    if not is_finstore_token(product):
+        return False
+    on_or_before = product.maturity_date or reference
+    return has_finstore_redemption_on_or_before(product, on_or_before, transactions=transactions)
 
 def _estimate_maturity_redemption_amount(product: Product) -> tuple[Decimal | None, Decimal | None]:
     principal = product.market_value
@@ -183,7 +195,7 @@ def build_operations_calendar(
             (product.units or Decimal('0')) <= 0
             and product.product_type == Product.ProductType.TOKEN
             and product.maturity_date is not None
-            and product.maturity_date < reference
+            and product.maturity_date <= reference
         ):
             continue
         if product.product_type not in (
@@ -203,6 +215,9 @@ def build_operations_calendar(
         product_transactions = None
         if transaction_map is not None:
             product_transactions = transaction_map.get(product.id, [])
+
+        if _token_already_redeemed(product, reference=reference, transactions=product_transactions):
+            continue
 
         label = product_group_label(*product_group_key(product))
         maturity_in_window = _maturity_in_window(product, reference=reference, window_end=window_end)

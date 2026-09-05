@@ -10,10 +10,16 @@ from apps.common.services.aigenis_funding import (
 	replace_aigenis_paritet_funding_with_alfabank_transfer,
 )
 from apps.common.services.aigenis_reconciliation import canonical_aigenis_security_name, reconcile_aigenis_products
-from apps.common.services.finstore_operations import is_finstore_redemption_operation
+from apps.common.services.finstore_operations import (
+    build_finstore_transaction_fingerprint,
+    is_finstore_income_operation,
+    is_finstore_redemption_operation,
+)
 from apps.products.models import Product
 from apps.imports.services.parsers.base import BaseImportParser, ParseResult
+from django.db.models import Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 
 class XLSImportParser(BaseImportParser):
@@ -185,32 +191,50 @@ class XLSImportParser(BaseImportParser):
 
         transactions_created = 0
         for transaction_row in pending_transactions:
-            _, was_created = Transaction.objects.update_or_create(
-                import_fingerprint=f"finstore:{raw_import_file.checksum}:{transaction_row['row_number']}",
-                defaults={
-                    'account': transaction_row['account'],
-                    'product': product_map.get(transaction_row['token_name']),
-                    'import_job': raw_import_file.job,
-                    'transaction_type': transaction_row['transaction_type'],
-                    'currency': transaction_row['account'].currency,
-                    'amount': transaction_row['amount'],
-                    'amount_usd': Decimal('0'),
-                    'quantity': transaction_row['quantity'],
-                    'unit_price': transaction_row['unit_price'],
-                    'occurred_at': transaction_row['occurred_at'],
-                    'description': transaction_row['description'],
-                    'metadata': {
-                        'imported_from': 'finstore-history',
-                        'operation_type': transaction_row['operation_type'],
-                        'token_name': transaction_row['token_name'],
-                        'token_id': transaction_row['token_id'],
-                        'amount_currency': transaction_row['amount_currency_code'],
-                        'raw_amount': transaction_row['raw_amount'],
-                    },
-                },
+            fingerprint = build_finstore_transaction_fingerprint(
+                operation_type=transaction_row['operation_type'],
+                token_name=transaction_row['token_name'],
+                occurred_at=transaction_row['occurred_at'],
+                amount=transaction_row['amount'],
+                quantity=transaction_row['quantity'],
+                amount_currency=transaction_row['amount_currency_code'],
             )
-            if was_created:
+            defaults = {
+                'account': transaction_row['account'],
+                'product': product_map.get(transaction_row['token_name']),
+                'import_job': raw_import_file.job,
+                'transaction_type': transaction_row['transaction_type'],
+                'currency': transaction_row['account'].currency,
+                'amount': transaction_row['amount'],
+                'amount_usd': Decimal('0'),
+                'quantity': transaction_row['quantity'],
+                'unit_price': transaction_row['unit_price'],
+                'occurred_at': transaction_row['occurred_at'],
+                'description': transaction_row['description'],
+                'metadata': {
+                    'imported_from': 'finstore-history',
+                    'operation_type': transaction_row['operation_type'],
+                    'token_name': transaction_row['token_name'],
+                    'token_id': transaction_row['token_id'],
+                    'amount_currency': transaction_row['amount_currency_code'],
+                    'raw_amount': transaction_row['raw_amount'],
+                },
+            }
+            existing = self._find_existing_finstore_transaction(fingerprint, transaction_row)
+            if existing is None:
+                Transaction.objects.create(import_fingerprint=fingerprint, **defaults)
                 transactions_created += 1
+            else:
+                update_fields = []
+                if existing.import_fingerprint != fingerprint:
+                    existing.import_fingerprint = fingerprint
+                    update_fields.append('import_fingerprint')
+                for field, value in defaults.items():
+                    if getattr(existing, field) != value:
+                        setattr(existing, field, value)
+                        update_fields.append(field)
+                if update_fields:
+                    existing.save(update_fields=[*dict.fromkeys(update_fields), 'updated_at'])
 
         from apps.common.services.finstore_reconciliation import reconcile_finstore_products
 
@@ -748,17 +772,55 @@ class XLSImportParser(BaseImportParser):
             return ''
         return currency_code.replace('.sc', '').strip().upper()
 
+    def _coerce_finstore_occurred_at(self, value):
+        if value in ('', None):
+            return None
+        if hasattr(value, 'isoformat') and not isinstance(value, str):
+            return value
+        parsed = parse_datetime(str(value))
+        if parsed is None:
+            return None
+        if timezone.is_naive(parsed):
+            return timezone.make_aware(parsed, timezone.get_current_timezone())
+        return parsed
+
+    def _find_existing_finstore_transaction(self, fingerprint: str, transaction_row: dict):
+        existing = Transaction.objects.filter(import_fingerprint=fingerprint).first()
+        if existing is not None:
+            return existing
+
+        occurred_at = self._coerce_finstore_occurred_at(transaction_row['occurred_at'])
+        if occurred_at is None:
+            return None
+
+        qs = Transaction.objects.filter(
+            import_fingerprint__startswith='finstore:',
+            occurred_at=occurred_at,
+            amount=transaction_row['amount'],
+            quantity=transaction_row['quantity'],
+            transaction_type=transaction_row['transaction_type'],
+            metadata__imported_from='finstore-history',
+            metadata__operation_type=transaction_row['operation_type'],
+        )
+        token_name = transaction_row.get('token_name') or ''
+        if token_name:
+            qs = qs.filter(metadata__token_name=token_name)
+        else:
+            qs = qs.filter(account=transaction_row['account']).filter(
+                Q(metadata__token_name='') | Q(metadata__token_name__isnull=True)
+            )
+        return qs.order_by('id').first()
+
     def _build_finstore_transaction_payload(self, row: dict, amount_decimal: Decimal) -> tuple[Decimal, str]:
         operation_type = row.get('operation_type', '')
         trade_operations = {'Покупка токенов', 'Покупка ICO токенов на Вторичном рынке'}
-        income_operations = {'Получение дохода'}
         deposit_operations = {'Пополнение кошелька'}
 
         if operation_type in trade_operations:
             return -abs(amount_decimal), Transaction.TransactionType.TRADE
         if is_finstore_redemption_operation(operation_type):
             return abs(amount_decimal), Transaction.TransactionType.INCOME
-        if operation_type in income_operations:
+        if is_finstore_income_operation(operation_type):
             return abs(amount_decimal), Transaction.TransactionType.INCOME
         if operation_type in deposit_operations:
             return abs(amount_decimal), Transaction.TransactionType.DEPOSIT
@@ -766,6 +828,10 @@ class XLSImportParser(BaseImportParser):
 
     def _build_finstore_position_quantity(self, row: dict, quantity_decimal: Decimal) -> Decimal:
         operation_type = row.get('operation_type', '')
+        # Coupon / accrued-income rows must not change position size even when
+        # Finstore fills the quantity column with the cash amount.
+        if is_finstore_income_operation(operation_type):
+            return Decimal('0')
         if is_finstore_redemption_operation(operation_type):
             return -abs(quantity_decimal)
         return quantity_decimal

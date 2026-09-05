@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.utils import timezone
 
 from apps.accounts.models import Transaction
+from apps.common.services.finstore_operations import is_finstore_income_operation, is_finstore_redemption_operation
 from apps.products.models import Product
 
 FINSTORE_INSTITUTION_SLUG = 'finstore'
@@ -164,12 +165,40 @@ def _latest_finstore_income_payment_date(
 ) -> date | None:
 	latest = None
 	for ledger_transaction in transactions:
-		if ledger_transaction.transaction_type != Transaction.TransactionType.INCOME:
+		metadata = ledger_transaction.metadata if isinstance(ledger_transaction.metadata, dict) else {}
+		operation_type = metadata.get('operation_type', '')
+		if is_finstore_redemption_operation(operation_type):
+			continue
+		is_income = is_finstore_income_operation(operation_type) or (
+			ledger_transaction.transaction_type == Transaction.TransactionType.INCOME
+			and not (ledger_transaction.quantity or 0)
+		)
+		if not is_income:
 			continue
 		payment_date = timezone.localdate(ledger_transaction.occurred_at)
 		if payment_date <= on_or_before and (latest is None or payment_date > latest):
 			latest = payment_date
 	return latest
+
+
+def has_finstore_redemption_on_or_before(
+	product: Product,
+	on_or_before: date,
+	*,
+	transactions: list[Transaction] | None = None,
+) -> bool:
+	source = (
+		transactions
+		if transactions is not None
+		else list(Transaction.objects.filter(product=product).order_by('occurred_at', 'id'))
+	)
+	for ledger_transaction in source:
+		metadata = ledger_transaction.metadata if isinstance(ledger_transaction.metadata, dict) else {}
+		if not is_finstore_redemption_operation(metadata.get('operation_type', '')):
+			continue
+		if timezone.localdate(ledger_transaction.occurred_at) <= on_or_before:
+			return True
+	return False
 
 
 def estimate_finstore_redemption_income_amount(
@@ -187,6 +216,17 @@ def estimate_finstore_redemption_income_amount(
 		if transactions is not None
 		else list(Transaction.objects.filter(product=product).order_by('occurred_at', 'id'))
 	)
+	if has_finstore_redemption_on_or_before(product, redemption_date, transactions=source):
+		# Position already settled in history — no residual forecast.
+		return None, None
+	# If regular coupon income already posted on the redemption date, residual is settled.
+	for ledger_transaction in source:
+		metadata = ledger_transaction.metadata if isinstance(ledger_transaction.metadata, dict) else {}
+		if not is_finstore_income_operation(metadata.get('operation_type', '')):
+			continue
+		if timezone.localdate(ledger_transaction.occurred_at) == redemption_date:
+			return None, None
+
 	first_hold = first_holding_date(product, transactions=source)
 	if first_hold is None or first_hold > redemption_date:
 		return None, None

@@ -298,7 +298,7 @@ class OperationsCalendarTests(TestCase):
 
         morning = build_operations_calendar([deposit], today=date(2026, 7, 29), future_days=60)
         self.assertEqual(morning[0]['date'], date(2026, 7, 29))
-        self.assertEqual(morning[0]['groups'][0]['events'][0]['amount'], Decimal('13.81'))
+        self.assertEqual(morning[0]['groups'][0]['events'][0]['amount'], Decimal('14.29'))
 
         Transaction.objects.create(
             account=self.account,
@@ -335,7 +335,7 @@ class OperationsCalendarTests(TestCase):
 
         after_fact = build_operations_calendar([deposit], today=date(2026, 7, 29), future_days=60)
         self.assertEqual([day['date'] for day in after_fact], [date(2026, 8, 29)])
-        self.assertEqual(after_fact[0]['groups'][0]['events'][0]['amount'], Decimal('14.74'))
+        self.assertEqual(after_fact[0]['groups'][0]['events'][0]['amount'], Decimal('15.23'))
 
         Transaction.objects.create(
             account=self.account,
@@ -355,7 +355,7 @@ class OperationsCalendarTests(TestCase):
         )
         after_top_up = build_operations_calendar([deposit], today=date(2026, 8, 16), future_days=60)
         self.assertEqual(after_top_up[0]['date'], date(2026, 8, 29))
-        self.assertEqual(after_top_up[0]['groups'][0]['events'][0]['amount'], Decimal('18.74'))
+        self.assertEqual(after_top_up[0]['groups'][0]['events'][0]['amount'], Decimal('19.46'))
 
     def test_alfabank_forecasts_use_actual_days_and_following_weekday(self):
         alfabank = FinancialInstitution.objects.create(
@@ -364,9 +364,9 @@ class OperationsCalendarTests(TestCase):
             institution_type=FinancialInstitution.InstitutionType.BANK,
         )
         specs = (
-            ('ALFA1', Decimal('1086.02'), Decimal('16.00'), date(2026, 7, 10), date(2026, 7, 27), Decimal('7.62')),
-            ('ALFA2', Decimal('616.75'), Decimal('15.50'), date(2026, 7, 10), date(2026, 7, 27), Decimal('4.19')),
-            ('ALFA3', Decimal('530.95'), Decimal('15.00'), date(2026, 7, 13), date(2026, 7, 28), Decimal('3.05')),
+            ('ALFA1', Decimal('1086.02'), Decimal('16.00'), date(2026, 7, 10), date(2026, 7, 27), Decimal('8.09')),
+            ('ALFA2', Decimal('616.75'), Decimal('15.50'), date(2026, 7, 10), date(2026, 7, 27), Decimal('4.45')),
+            ('ALFA3', Decimal('530.95'), Decimal('15.00'), date(2026, 7, 13), date(2026, 7, 28), Decimal('3.27')),
         )
         products = []
         for name, balance, rate, last_payment, _, _ in specs:
@@ -509,6 +509,6 @@ class OperationsCalendarTests(TestCase):
 
         self.assertEqual(
             [(event['kind'], event['amount']) for event in group['events']],
-            [('maturity_forecast', Decimal('530.95')), ('income_forecast', Decimal('2.84'))],
+            [('maturity_forecast', Decimal('530.95')), ('income_forecast', Decimal('3.05'))],
         )
-        self.assertEqual(group['total_amount'], Decimal('533.79'))
+        self.assertEqual(group['total_amount'], Decimal('534.00'))

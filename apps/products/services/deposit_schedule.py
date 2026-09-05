@@ -170,14 +170,16 @@ def _principal_day_weight(
 ) -> Decimal | None:
 	"""Sum of principal × days over actual balance segments.
 
-	Bank day-count: accrual starts the day after the previous payment and ends
-	the day before the next payment, including top-ups from the day credited.
+	Bank day-count: accrual starts the day after the previous payment and includes
+	the payment day itself (BNB / Belarusbank / Alfa). Top-ups count from the day
+	credited; capitalization quantity on the payment day is excluded from this
+	period via end_date=payment_date in quantity deltas.
 	"""
 	if payment_date <= previous_payment_date:
 		return None
 
 	accrual_start = previous_payment_date + timedelta(days=1)
-	accrual_end = payment_date - timedelta(days=1)
+	accrual_end = payment_date
 	if accrual_end < accrual_start:
 		return None
 
