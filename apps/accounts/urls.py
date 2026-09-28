@@ -6,6 +6,9 @@ app_name = 'accounts'
 
 urlpatterns = [
     path('new/', views.account_create, name='create'),
+    path('bynex/trade/', views.bynex_trade_create, name='bynex_trade_create'),
+    path('bynex/transfer-to-binance/', views.bynex_binance_transfer_create, name='bynex_binance_transfer_create'),
+    path('alfabank/transfer-to-aigenis/', views.alfa_aigenis_transfer_create, name='alfa_aigenis_transfer_create'),
     path('transactions/', views.transaction_list, name='transaction_list'),
     path('transactions/new/', views.transaction_create, name='transaction_create'),
     path('transactions/<int:pk>/edit/', views.transaction_edit, name='transaction_edit'),

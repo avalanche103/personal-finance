@@ -20,6 +20,11 @@ from apps.products.models import Product
 MONEY_QUANT = Decimal('0.01')
 UNIT_QUANT = Decimal('0.000001')
 PRICE_QUANT = Decimal('0.00000001')
+BYNEX_CASH_ASSETS = {'USD', 'USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI'}
+CURRENCY_DISPLAY = {
+	'USD': ('US Dollar', '$'),
+	'USDT': ('Tether USD', 'USDT'),
+}
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,50 @@ def _ensure_currency(code: str, *, name: str = '', symbol: str = '', usd_rate: D
 	return currency
 
 
+def _is_cash_asset(asset: str) -> bool:
+	return (asset or '').strip().upper() in BYNEX_CASH_ASSETS
+
+
+def is_cash_like_product(product: Product | None) -> bool:
+	if product is None:
+		return False
+	metadata = product.metadata if isinstance(product.metadata, dict) else {}
+	asset = str(metadata.get('asset') or product.symbol or '').upper()
+	return _is_cash_asset(asset)
+
+
+def _ensure_wallet_account(institution: FinancialInstitution, asset: str) -> Account:
+	normalized = asset.strip().upper()
+	name, symbol = CURRENCY_DISPLAY.get(normalized, (normalized, normalized))
+	usd_rate = Decimal('1') if _is_cash_asset(normalized) else Decimal('0')
+	currency = _ensure_currency(normalized, name=name, symbol=symbol, usd_rate=usd_rate)
+	if currency.usd_rate != usd_rate and _is_cash_asset(normalized):
+		currency.usd_rate = usd_rate
+		currency.save(update_fields=['usd_rate', 'updated_at'])
+	external_id = f'bynex:wallet:{normalized}'
+	account = (
+		Account.objects.filter(institution=institution, external_id=external_id).first()
+		or Account.objects.filter(institution=institution, name=f'BYNEX {normalized} Account').first()
+	)
+	if account is None:
+		return Account.objects.create(
+			institution=institution,
+			name=f'BYNEX {normalized} Account',
+			account_type=Account.AccountType.WALLET,
+			currency=currency,
+			external_id=external_id,
+			metadata={'source': 'bynex', 'wallet': 'main', 'asset': normalized},
+		)
+	account.account_type = Account.AccountType.WALLET
+	account.currency = currency
+	account.external_id = account.external_id or external_id
+	metadata = dict(account.metadata or {})
+	metadata.update({'source': 'bynex', 'wallet': 'main', 'asset': normalized})
+	account.metadata = metadata
+	account.save(update_fields=['account_type', 'currency', 'external_id', 'metadata', 'updated_at'])
+	return account
+
+
 def ensure_bynex_reference_data() -> tuple[FinancialInstitution, ImportSource, Account]:
 	usd = _ensure_currency('USD', name='US Dollar', symbol='$', usd_rate=Decimal('1'))
 	institution, _ = FinancialInstitution.objects.update_or_create(
@@ -116,27 +165,7 @@ def ensure_bynex_reference_data() -> tuple[FinancialInstitution, ImportSource, A
 			'config': {'parser': 'bynex-manual-trades', 'bootstrap': True},
 		},
 	)
-	account = (
-		Account.objects.filter(institution=institution, external_id='bynex:wallet:USD').first()
-		or Account.objects.filter(institution=institution, name='BYNEX USD Account').first()
-	)
-	if account is None:
-		account = Account.objects.create(
-			institution=institution,
-			name='BYNEX USD Account',
-			account_type=Account.AccountType.WALLET,
-			currency=usd,
-			external_id='bynex:wallet:USD',
-			metadata={'source': 'bynex', 'wallet': 'main', 'asset': 'USD'},
-		)
-	else:
-		account.account_type = Account.AccountType.WALLET
-		account.currency = usd
-		account.external_id = account.external_id or 'bynex:wallet:USD'
-		metadata = dict(account.metadata or {})
-		metadata.update({'source': 'bynex', 'wallet': 'main', 'asset': 'USD'})
-		account.metadata = metadata
-		account.save(update_fields=['account_type', 'currency', 'external_id', 'metadata', 'updated_at'])
+	account = _ensure_wallet_account(institution, 'USD')
 	return institution, source, account
 
 
@@ -309,9 +338,55 @@ def _refresh_product_from_transactions(product: Product, *, current_price: Decim
 	)
 	if current_price is not None:
 		product.current_price = _price(current_price)
-	product.current_value_usd = _money(product.units * (product.current_price or Decimal('0')))
-	product.is_active = product.units > 0
+	asset = str((product.metadata or {}).get('asset') or product.symbol or '').upper()
+	if _is_cash_asset(asset):
+		# Cash-like assets are shown as wallet accounts, not product holdings.
+		product.current_value_usd = Decimal('0.00')
+		product.is_active = False
+	else:
+		product.current_value_usd = _money(product.units * (product.current_price or Decimal('0')))
+		product.is_active = product.units > 0
 	product.save(update_fields=['units', 'current_price', 'current_value_usd', 'is_active', 'updated_at'])
+
+
+def _credit_bynex_cash_buy(
+	*,
+	institution: FinancialInstitution,
+	fingerprint: str,
+	asset: str,
+	quantity: Decimal,
+	price: Decimal,
+	occurred_at: datetime,
+	job: ImportJob | None = None,
+	external_id: str = '',
+) -> tuple[Transaction, bool]:
+	asset_account = _ensure_wallet_account(institution, asset)
+	credit_amount = _money(quantity)
+	credit, created = Transaction.objects.update_or_create(
+		import_fingerprint=f'{fingerprint}:base-in',
+		defaults={
+			'account': asset_account,
+			'product': None,
+			'import_job': job,
+			'transaction_type': Transaction.TransactionType.DEPOSIT,
+			'currency': asset_account.currency,
+			'external_id': f'{external_id}:base-in' if external_id else '',
+			'amount': credit_amount,
+			'amount_usd': credit_amount,
+			'quantity': Decimal('0'),
+			'unit_price': _price(price),
+			'occurred_at': occurred_at,
+			'description': f'BYNEX {asset} bought',
+			'metadata': {
+				'source': 'bynex',
+				'asset': asset,
+				'operation_kind': 'spot_buy_credit',
+				'trade_fingerprint': fingerprint,
+			},
+		},
+	)
+	sync_account_balance(asset_account)
+	return credit, created
 
 
 def record_bynex_trade(row: BynexTradeRow) -> BynexTradeResult:
@@ -377,6 +452,7 @@ def record_bynex_trade(row: BynexTradeRow) -> BynexTradeResult:
 					'source': 'bynex',
 					'symbol': f'{row.base_asset}{row.quote_currency}',
 					'side': row.side,
+					'base_asset': row.base_asset,
 					'gross_amount_exact': str(exact_gross),
 					'fee_amount_exact': str(row.fee),
 					'total_amount_exact': str(exact_total),
@@ -384,6 +460,17 @@ def record_bynex_trade(row: BynexTradeRow) -> BynexTradeResult:
 				},
 			},
 		)
+		if row.side == 'buy' and _is_cash_asset(row.base_asset):
+			_credit_bynex_cash_buy(
+				institution=institution,
+				job=job,
+				fingerprint=fingerprint,
+				asset=row.base_asset,
+				quantity=row.quantity,
+				price=row.price,
+				occurred_at=row.occurred_at,
+				external_id=row.external_id,
+			)
 		_refresh_product_from_transactions(product, current_price=row.price)
 		sync_account_balance(account)
 		job.records_created = 1 if created else 0
@@ -409,8 +496,11 @@ def record_bynex_transfer(row: BynexTransferRow) -> BynexTransferResult:
 
 	institution, source, account = ensure_bynex_reference_data()
 	product = _ensure_product(institution, row.asset)
+	asset_account = _ensure_wallet_account(institution, row.asset) if _is_cash_asset(row.asset) else account
 	fingerprint = _transfer_fingerprint(row)
 	fee_fingerprint = _transfer_fingerprint(row, 'fee')
+	transfer_amount = -_money(row.quantity) if _is_cash_asset(row.asset) else Decimal('0')
+	exclude_cash = not _is_cash_asset(row.asset)
 
 	with transaction.atomic():
 		job, _ = ImportJob.objects.get_or_create(
@@ -438,14 +528,14 @@ def record_bynex_transfer(row: BynexTransferRow) -> BynexTransferResult:
 		transfer, transfer_created = Transaction.objects.update_or_create(
 			import_fingerprint=fingerprint,
 			defaults={
-				'account': account,
+				'account': asset_account,
 				'product': product,
 				'import_job': job,
 				'transaction_type': Transaction.TransactionType.TRANSFER,
-				'currency': account.currency,
+				'currency': asset_account.currency,
 				'external_id': row.external_id,
-				'amount': Decimal('0'),
-				'amount_usd': Decimal('0'),
+				'amount': transfer_amount,
+				'amount_usd': transfer_amount if _is_cash_asset(row.asset) else Decimal('0'),
 				'quantity': _units(-row.quantity),
 				'unit_price': product.current_price or Decimal('0'),
 				'occurred_at': row.occurred_at,
@@ -454,24 +544,25 @@ def record_bynex_transfer(row: BynexTransferRow) -> BynexTransferResult:
 					'source': 'bynex',
 					'asset': row.asset,
 					'destination': row.destination,
-					'exclude_from_account_balance': True,
+					'exclude_from_account_balance': exclude_cash,
 				},
 			},
 		)
 		fee_transaction = None
 		fee_created = False
 		if row.fee:
+			fee_amount = -_money(row.fee) if _is_cash_asset(row.asset) else Decimal('0')
 			fee_transaction, fee_created = Transaction.objects.update_or_create(
 				import_fingerprint=fee_fingerprint,
 				defaults={
-					'account': account,
+					'account': asset_account,
 					'product': product,
 					'import_job': job,
 					'transaction_type': Transaction.TransactionType.FEE,
-					'currency': account.currency,
+					'currency': asset_account.currency,
 					'external_id': f'{row.external_id}:fee' if row.external_id else '',
-					'amount': Decimal('0'),
-					'amount_usd': Decimal('0'),
+					'amount': fee_amount,
+					'amount_usd': fee_amount if _is_cash_asset(row.asset) else Decimal('0'),
 					'quantity': _units(-row.fee),
 					'unit_price': product.current_price or Decimal('0'),
 					'occurred_at': row.occurred_at,
@@ -481,12 +572,14 @@ def record_bynex_transfer(row: BynexTransferRow) -> BynexTransferResult:
 						'asset': row.asset,
 						'destination': row.destination,
 						'fee_for': fingerprint,
-						'exclude_from_account_balance': True,
+						'exclude_from_account_balance': exclude_cash,
 					},
 				},
 			)
 		_refresh_product_from_transactions(product)
 		sync_account_balance(account)
+		if asset_account.pk != account.pk:
+			sync_account_balance(asset_account)
 		created = int(transfer_created) + int(fee_created)
 		job.records_created = created
 		job.finished_at = timezone.now()
@@ -500,3 +593,76 @@ def record_bynex_transfer(row: BynexTransferRow) -> BynexTransferResult:
 		account=account,
 		created=created,
 	)
+
+
+def record_bynex_usd_usdt_trade(
+	*,
+	usd_spent,
+	usdt_received,
+	occurred_at: str | datetime,
+	external_id: str = '',
+) -> BynexTradeResult:
+	usd_spent = _to_decimal(usd_spent)
+	usdt_received = _to_decimal(usdt_received)
+	if usd_spent <= 0:
+		raise ValueError('USD spent must be positive.')
+	if usdt_received <= 0:
+		raise ValueError('USDT received must be positive.')
+	return record_bynex_trade(
+		build_trade_row(
+			occurred_at=occurred_at,
+			side='buy',
+			base_asset='USDT',
+			quote_currency='USD',
+			quantity=usdt_received,
+			price=usd_spent / usdt_received,
+			fee=Decimal('0'),
+			total=usd_spent,
+			external_id=external_id,
+		)
+	)
+
+
+def _trade_base_asset(trade: Transaction) -> str:
+	metadata = trade.metadata if isinstance(trade.metadata, dict) else {}
+	base = str(metadata.get('base_asset') or '').strip().upper()
+	if base:
+		return base
+	symbol = str(metadata.get('symbol') or '').strip().upper()
+	if symbol.endswith('USD') and len(symbol) > 3:
+		return symbol[:-3]
+	if trade.product_id:
+		return str(trade.product.symbol or (trade.product.metadata or {}).get('asset') or '').strip().upper()
+	return ''
+
+
+def backfill_bynex_cash_wallets() -> int:
+	"""Credit BYNEX cash wallets for existing USD→USDT (etc.) buys that only updated the product."""
+	created = 0
+	trades = Transaction.objects.filter(
+		metadata__source='bynex',
+		transaction_type=Transaction.TransactionType.TRADE,
+		metadata__side='buy',
+	).select_related('account', 'account__institution', 'import_job', 'product')
+	for trade in trades:
+		asset = _trade_base_asset(trade)
+		if not _is_cash_asset(asset) or asset == 'USD':
+			continue
+		fingerprint = trade.import_fingerprint
+		if not fingerprint or Transaction.objects.filter(import_fingerprint=f'{fingerprint}:base-in').exists():
+			continue
+		institution = trade.account.institution
+		_credit_bynex_cash_buy(
+			institution=institution,
+			job=trade.import_job,
+			fingerprint=fingerprint,
+			asset=asset,
+			quantity=trade.quantity or Decimal('0'),
+			price=trade.unit_price or Decimal('0'),
+			occurred_at=trade.occurred_at,
+			external_id=trade.external_id or '',
+		)
+		if trade.product_id:
+			_refresh_product_from_transactions(trade.product)
+		created += 1
+	return created

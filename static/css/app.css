@@ -1142,6 +1142,15 @@ button {
     border-bottom: 1px solid var(--border);
 }
 
+.account-group-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.65rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+}
+
 .period-comparison-heading strong {
     display: block;
     line-height: 1.25;

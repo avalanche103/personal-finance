@@ -61,7 +61,13 @@ class FakeBinanceClient:
 		return [{'asset': 'USDT', 'free': '12.34000000', 'locked': '0', 'freeze': '0'}]
 
 	def fetch_simple_earn_flexible_positions(self):
-		return {'rows': [{'asset': 'LDBTC', 'totalAmount': '0.20000000'}, {'asset': 'USDC', 'totalAmount': '10.00000000'}]}
+		return {
+			'rows': [
+				{'asset': 'LDBTC', 'totalAmount': '0.20000000'},
+				{'asset': 'USDT', 'totalAmount': '150.50000000'},
+				{'asset': 'USDC', 'totalAmount': '10.00000000'},
+			]
+		}
 
 	def fetch_simple_earn_locked_positions(self):
 		return {'rows': [{'asset': 'ETH', 'amount': '1.50000000'}]}
@@ -198,11 +204,17 @@ class BinanceSyncTests(TestCase):
 		sync_spot_balances(client=FakeBinanceClient(), create_snapshots=True)
 		result = sync_earn_and_funding(client=FakeBinanceClient())
 
-		self.assertEqual(result.rows_detected, 4)
+		self.assertEqual(result.rows_detected, 5)
 		self.assertEqual(result.details.get('errors'), {})
 		self.assertNotIn('permission_skips', result.details)
 		institution = FinancialInstitution.objects.get(slug='binance')
 		self.assertTrue(Account.objects.filter(institution=institution, external_id='binance:funding:USDT').exists())
+		# Fiat Flexible Earn lifts spot account when Simple Earn API > LD*/spot free.
+		usdt_account = Account.objects.get(institution=institution, external_id='binance:spot:USDT')
+		self.assertEqual(str(usdt_account.current_balance), '150.50')
+		self.assertEqual(usdt_account.metadata.get('flexible_earn_amount'), '150.50000000')
+		usdc_account = Account.objects.get(institution=institution, external_id='binance:spot:USDC')
+		self.assertEqual(str(usdc_account.current_balance), '10.00')
 		self.assertFalse(Product.objects.filter(institution=institution, external_id='binance:spot:USDC').exists())
 		self.assertFalse(Product.objects.filter(institution=institution, external_id='binance:earn_flexible:BTC').exists())
 		self.assertEqual(str(Product.objects.get(institution=institution, external_id='binance:spot:BTC').units), '0.600000')

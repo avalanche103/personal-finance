@@ -1074,7 +1074,28 @@ def sync_earn_and_funding(client: BinanceClient | None = None, *, dry_run: bool 
 			updated += 1
 
 		for asset, summary in flexible_totals.items():
+			# Spot wallet often shows only LD* (partial). Simple Earn Flexible API is
+			# authoritative when higher — same max() rule for fiat accounts and crypto products.
 			if asset in FIAT_ACCOUNT_ASSETS:
+				account = _ensure_account(institution, asset, wallet='spot', update_balance=False)
+				current = account.current_balance or Decimal('0')
+				amount = max(current, summary['amount'])
+				_ensure_account(institution, asset, wallet='spot', update_balance=True, balance=amount)
+				account = Account.objects.get(institution=institution, external_id=f'binance:spot:{asset}')
+				metadata = account.metadata if isinstance(account.metadata, dict) else {}
+				metadata.update({
+					'source': 'binance',
+					'wallet': 'spot',
+					'asset': asset,
+					'current_balance_source': 'api_snapshot',
+					'flexible_earn_amount': str(summary['amount']),
+					'flexible_earn_raw_assets': summary['raw_assets'],
+					'flexible_earn_payloads': summary['payloads'],
+					'flexible_earn_strategy': 'replace_if_greater',
+				})
+				account.metadata = metadata
+				account.save(update_fields=['metadata', 'updated_at'])
+				updated += 1
 				continue
 			product = _ensure_product(institution, asset, area='spot')
 			price_usd, price_symbol = _asset_price_usd(asset, prices)

@@ -25,6 +25,18 @@ def get_alfabank_byn_account() -> Account | None:
 	)
 
 
+def get_aigenis_byn_account() -> Account | None:
+	return (
+		Account.objects.select_related('institution', 'currency')
+		.filter(
+			institution__slug='aigenis',
+			currency__code='BYN',
+		)
+		.order_by('id')
+		.first()
+	)
+
+
 def apply_aigenis_indexed_bond_defaults(product: Product, *, save: bool = True) -> bool:
 	product_key = product.external_id or product.isin
 	if product_key not in AIGENIS_INDEXED_BOND_ISINS:

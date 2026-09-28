@@ -696,3 +696,146 @@ class AccountViewsTests(TestCase):
         )
         self.assertRedirects(post_response, next_url)
         self.assertTrue(Transaction.objects.filter(description='Prefill top-up', product=deposit).exists())
+
+
+class AccountShortcutOperationTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
+
+        BootstrapCommand().handle()
+
+    def test_account_list_shows_bynex_and_alfa_shortcut_buttons(self):
+        response = self.client.get(reverse('accounts:list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Add trade')
+        self.assertContains(response, reverse('accounts:bynex_trade_create'))
+        self.assertContains(response, 'Add transfer to Binance')
+        self.assertContains(response, reverse('accounts:bynex_binance_transfer_create'))
+        self.assertContains(response, 'Add transfer to Aigenis')
+        self.assertContains(response, reverse('accounts:alfa_aigenis_transfer_create'))
+
+    def test_shortcut_forms_render_expected_fields(self):
+        bynex_trade = self.client.get(reverse('accounts:bynex_trade_create'))
+        self.assertEqual(bynex_trade.status_code, 200)
+        self.assertContains(bynex_trade, 'Потрачено USD')
+        self.assertContains(bynex_trade, 'Получено USDT')
+        self.assertContains(bynex_trade, 'Дата и время')
+
+        bynex_transfer = self.client.get(reverse('accounts:bynex_binance_transfer_create'))
+        self.assertEqual(bynex_transfer.status_code, 200)
+        self.assertContains(bynex_transfer, 'Сумма USDT')
+        self.assertContains(bynex_transfer, 'Комиссия')
+
+        alfa_transfer = self.client.get(reverse('accounts:alfa_aigenis_transfer_create'))
+        self.assertEqual(alfa_transfer.status_code, 200)
+        self.assertContains(alfa_transfer, 'Сумма BYN')
+        self.assertContains(alfa_transfer, 'Комиссия банка Альфа')
+
+    def test_bynex_trade_form_records_usd_spend_and_usdt_units(self):
+        response = self.client.post(
+            reverse('accounts:bynex_trade_create'),
+            {
+                'usd_spent': '269.54',
+                'usdt_received': '268.371000',
+                'occurred_at': '2026-09-10T14:00',
+            },
+        )
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        trade = Transaction.objects.get(description='BYNEX USDTUSD buy')
+        self.assertEqual(trade.transaction_type, Transaction.TransactionType.TRADE)
+        self.assertEqual(trade.amount, Decimal('-269.54'))
+        self.assertEqual(trade.quantity, Decimal('268.371000'))
+        self.assertEqual(trade.product.units, Decimal('268.371000'))
+        usdt_account = Account.objects.get(institution__slug='bynex', external_id='bynex:wallet:USDT')
+        self.assertEqual(usdt_account.current_balance, Decimal('268.37'))
+        self.assertEqual(usdt_account.currency.code, 'USDT')
+
+    def test_bynex_binance_transfer_moves_usdt_and_records_fee(self):
+        self.client.post(
+            reverse('accounts:bynex_trade_create'),
+            {
+                'usd_spent': '269.54',
+                'usdt_received': '268.371000',
+                'occurred_at': '2026-09-10T14:00',
+            },
+        )
+        response = self.client.post(
+            reverse('accounts:bynex_binance_transfer_create'),
+            {
+                'quantity': '263.371000',
+                'fee': '5',
+                'occurred_at': '2026-09-10T14:05',
+            },
+        )
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        product = Product.objects.get(external_id='bynex:spot:USDT')
+        self.assertEqual(product.units, Decimal('0.000000'))
+        self.assertFalse(product.is_active)
+        self.assertTrue(
+            Transaction.objects.filter(
+                transaction_type=Transaction.TransactionType.TRANSFER,
+                description__icontains='Binance',
+            ).exists()
+        )
+        self.assertEqual(
+            Transaction.objects.get(transaction_type=Transaction.TransactionType.FEE, description='BYNEX USDT transfer fee').quantity,
+            Decimal('-5.000000'),
+        )
+        binance_in = Transaction.objects.get(
+            metadata__operation_kind='incoming_from_bynex',
+        )
+        self.assertEqual(binance_in.amount, Decimal('263.37'))
+        self.assertEqual(binance_in.account.institution.slug, 'binance')
+        self.assertEqual(binance_in.transaction_type, Transaction.TransactionType.TRANSFER)
+        bynex_out = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.TRANSFER,
+            description__icontains='Binance',
+            account__institution__slug='bynex',
+        )
+        self.assertEqual(
+            bynex_out.metadata.get('transfer_pair_id'),
+            binance_in.metadata.get('transfer_pair_id'),
+        )
+        self.assertEqual(bynex_out.metadata.get('transfer_leg'), 'out')
+        self.assertEqual(binance_in.metadata.get('transfer_leg'), 'in')
+
+    def test_alfa_aigenis_transfer_posts_legs_and_fee(self):
+        alfa = Account.objects.get(institution__slug='alfabank', currency__code='BYN')
+        aigenis = Account.objects.get(institution__slug='aigenis', currency__code='BYN')
+        Transaction.objects.create(
+            account=alfa,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            currency=alfa.currency,
+            import_fingerprint='manual:alfa-funding-for-aigenis',
+            amount=Decimal('1005.00'),
+            amount_usd=Decimal('311.55'),
+            occurred_at=timezone.make_aware(timezone.datetime(2026, 9, 10, 10, 0)),
+            description='Opening',
+        )
+        from apps.accounts.services.balance import sync_account_balance
+
+        sync_account_balance(alfa)
+
+        response = self.client.post(
+            reverse('accounts:alfa_aigenis_transfer_create'),
+            {
+                'amount': '1000.00',
+                'fee': '5.00',
+                'occurred_at': '2026-09-10T15:00',
+            },
+        )
+        self.assertRedirects(response, f'{reverse("accounts:list")}#transactions')
+        legs = list(
+            Transaction.objects.filter(metadata__operation_kind='alfa_to_aigenis').order_by('amount')
+        )
+        self.assertEqual(len(legs), 2)
+        self.assertEqual(legs[0].amount, Decimal('-1000.00'))
+        self.assertEqual(legs[1].amount, Decimal('1000.00'))
+        fee = Transaction.objects.get(metadata__operation_kind='alfa_to_aigenis_fee')
+        self.assertEqual(fee.amount, Decimal('-5.00'))
+        self.assertEqual(fee.account_id, alfa.pk)
+        alfa.refresh_from_db()
+        aigenis.refresh_from_db()
+        self.assertEqual(alfa.current_balance, Decimal('0.00'))
+        self.assertEqual(aigenis.current_balance, Decimal('1000.00'))

@@ -1206,6 +1206,36 @@ class DashboardCashFlowTests(TestCase):
 		self.assertIn('cash_flows', metrics)
 		self.assertEqual(metrics['cash_flows'].as_of_date, timezone.localdate())
 
+	def test_bynex_usdt_buy_and_binance_transfer_are_not_external_cash_flows(self):
+		from apps.accounts.services.shortcuts import record_bynex_to_binance_transfer, record_bynex_usdt_buy
+
+		as_of = date(2026, 9, 10)
+		before = _build_deposit_withdrawal_totals(as_of)
+		Transaction.objects.create(
+			account=self.source_account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('100'),
+			amount_usd=Decimal('100'),
+			import_fingerprint='cash-flow-bynex-fee-funding',
+			occurred_at=timezone.make_aware(datetime(2026, 9, 10, 8, 0)),
+		)
+		record_bynex_usdt_buy(
+			usd_spent=Decimal('313.24'),
+			usdt_received=Decimal('310.542770'),
+			occurred_at=timezone.make_aware(datetime(2026, 9, 10, 9, 44)),
+		)
+		record_bynex_to_binance_transfer(
+			quantity=Decimal('305.542771'),
+			fee=Decimal('5'),
+			occurred_at=timezone.make_aware(datetime(2026, 9, 10, 10, 12)),
+		)
+
+		totals = _build_deposit_withdrawal_totals(as_of)
+
+		self.assertEqual(totals.month_deposits_usd - before.month_deposits_usd, Decimal('95'))
+		self.assertEqual(totals.month_withdrawals_usd - before.month_withdrawals_usd, Decimal('0'))
+
 
 class PeriodAttributionTests(TestCase):
 	def setUp(self):
@@ -1468,6 +1498,116 @@ class PeriodAttributionTests(TestCase):
 		self.assertEqual(product_row['change']['withdrawals_usd'], Decimal('0'))
 		self.assertEqual(product_row['change']['organic_change_usd'], Decimal('10'))
 		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('10'))
+
+	def test_bynex_usdt_conversion_is_organic_not_cash_flow(self):
+		usd_account = self._account('BYNEX USD', Decimal('313.24'))
+		usdt_account = self._account('BYNEX USDT', Decimal('0'))
+		product = Product.objects.create(
+			institution=self.institution,
+			name='BYNEX USDT Spot',
+			product_type=Product.ProductType.CRYPTO,
+			currency=self.usd,
+			units=Decimal('0'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('0'),
+			external_id='bynex:spot:USDT',
+			is_active=False,
+			metadata={'asset': 'USDT', 'source': 'bynex'},
+		)
+		Transaction.objects.create(
+			account=usd_account,
+			product=product,
+			transaction_type=Transaction.TransactionType.TRADE,
+			currency=self.usd,
+			amount=Decimal('-313.24'),
+			amount_usd=Decimal('-313.24'),
+			quantity=Decimal('310.542770'),
+			import_fingerprint='bynex:trade:attribution-usdt',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 9, 44)),
+			metadata={'source': 'bynex', 'symbol': 'USDTUSD', 'side': 'buy'},
+		)
+		Transaction.objects.create(
+			account=usdt_account,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('310.54'),
+			amount_usd=Decimal('310.54'),
+			import_fingerprint='bynex:trade:attribution-usdt:base-in',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 9, 44)),
+			metadata={'source': 'bynex', 'operation_kind': 'spot_buy_credit', 'asset': 'USDT'},
+		)
+
+		comparison = self._comparison()
+
+		self.assertEqual(comparison['portfolio']['contributions_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('-2.70'))
+
+	def test_bynex_to_binance_usdt_move_is_not_portfolio_cash_flow(self):
+		cash = self._account('External cash', Decimal('0'))
+		bynex = self._account('BYNEX USDT', Decimal('310.54'))
+		binance = self._account('Binance USDT', Decimal('0'))
+		product = Product.objects.create(
+			institution=self.institution,
+			name='BYNEX USDT Spot',
+			product_type=Product.ProductType.CRYPTO,
+			currency=self.usd,
+			units=Decimal('0'),
+			current_price=Decimal('1'),
+			current_value_usd=Decimal('0'),
+			external_id='bynex:spot:USDT',
+			is_active=False,
+			metadata={'asset': 'USDT', 'source': 'bynex'},
+		)
+		Transaction.objects.create(
+			account=cash,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('100'),
+			amount_usd=Decimal('100'),
+			import_fingerprint='attribution-bynex-fee-funding',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 8, 0)),
+		)
+		Transaction.objects.create(
+			account=bynex,
+			product=product,
+			transaction_type=Transaction.TransactionType.TRANSFER,
+			currency=self.usd,
+			amount=Decimal('-305.54'),
+			amount_usd=Decimal('-305.54'),
+			quantity=Decimal('-305.542771'),
+			import_fingerprint='bynex:transfer:attribution-binance',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 10, 12)),
+			metadata={'source': 'bynex', 'asset': 'USDT', 'destination': 'Binance'},
+		)
+		Transaction.objects.create(
+			account=binance,
+			transaction_type=Transaction.TransactionType.DEPOSIT,
+			currency=self.usd,
+			amount=Decimal('305.54'),
+			amount_usd=Decimal('305.54'),
+			import_fingerprint='bynex:transfer:attribution-binance:binance-in',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 10, 12)),
+			metadata={'source': 'bynex', 'operation_kind': 'incoming_from_bynex'},
+		)
+		Transaction.objects.create(
+			account=bynex,
+			product=product,
+			transaction_type=Transaction.TransactionType.FEE,
+			currency=self.usd,
+			amount=Decimal('-5.00'),
+			amount_usd=Decimal('-5.00'),
+			quantity=Decimal('-5.000000'),
+			import_fingerprint='bynex:transfer:attribution-binance:fee',
+			occurred_at=timezone.make_aware(datetime(2026, 6, 10, 10, 12)),
+			metadata={'source': 'bynex', 'asset': 'USDT', 'destination': 'Binance'},
+		)
+
+		comparison = self._comparison()
+
+		self.assertEqual(comparison['portfolio']['contributions_usd'], Decimal('95.00'))
+		self.assertEqual(comparison['portfolio']['withdrawals_usd'], Decimal('0'))
+		self.assertEqual(comparison['portfolio']['organic_change_usd'], Decimal('0'))
 
 	def test_internal_transfer_cancels_at_portfolio_level(self):
 		source = self._account('Transfer source', Decimal('100'))

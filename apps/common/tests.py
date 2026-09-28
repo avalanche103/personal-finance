@@ -5,7 +5,7 @@ import pandas as pd
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 
-from apps.accounts.models import Transaction
+from apps.accounts.models import Account, Transaction
 from apps.common.management.commands.bootstrap_local_data import Command as BootstrapCommand
 from apps.common.services.bynex_trades import build_trade_row, build_transfer_row, record_bynex_trade, record_bynex_transfer
 from apps.common.services.finstore_reconciliation import reconcile_finstore_products
@@ -140,8 +140,12 @@ class BynexTradeTests(TestCase):
 		self.assertEqual(result.transaction.metadata['total_amount_exact'], '269.54137')
 		self.assertEqual(str(result.product.units), '268.371000')
 		self.assertEqual(str(result.product.current_price), '1.00411000')
-		self.assertEqual(str(result.product.current_value_usd), '269.47')
+		self.assertEqual(str(result.product.current_value_usd), '0.00')
+		self.assertFalse(result.product.is_active)
 		self.assertEqual(str(result.account.current_balance), '-88.79')
+		usdt_account = Account.objects.get(institution__slug='bynex', external_id='bynex:wallet:USDT')
+		self.assertEqual(str(usdt_account.current_balance), '268.37')
+		self.assertEqual(str(usdt_account.current_balance_usd), '268.37')
 
 		repeated = record_bynex_trade(row)
 		self.assertFalse(repeated.created)
@@ -181,6 +185,26 @@ class BynexTradeTests(TestCase):
 		self.assertEqual(str(result.product.current_value_usd), '0.00')
 		self.assertFalse(result.product.is_active)
 		self.assertEqual(str(result.account.current_balance), '-88.79')
+		usdt_account = Account.objects.get(institution__slug='bynex', external_id='bynex:wallet:USDT')
+		self.assertEqual(str(usdt_account.current_balance), '0.00')
 
 		repeated = record_bynex_transfer(transfer_row)
 		self.assertEqual(repeated.created, 0)
+
+	def test_record_bynex_usd_usdt_trade_uses_spent_and_received_amounts(self):
+		from apps.common.services.bynex_trades import record_bynex_usd_usdt_trade
+
+		result = record_bynex_usd_usdt_trade(
+			usd_spent='269.54',
+			usdt_received='268.371',
+			occurred_at='2026-09-10 14:00:00',
+			external_id='bynex-ui-usdt-buy',
+		)
+
+		self.assertTrue(result.created)
+		self.assertEqual(str(result.transaction.amount), '-269.54')
+		self.assertEqual(str(result.transaction.quantity), '268.371000')
+		self.assertEqual(result.transaction.metadata['total_amount_exact'], '269.54')
+		self.assertEqual(str(result.product.units), '268.371000')
+		usdt_account = Account.objects.get(institution__slug='bynex', external_id='bynex:wallet:USDT')
+		self.assertEqual(str(usdt_account.current_balance), '268.37')

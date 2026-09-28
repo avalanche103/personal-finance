@@ -20,6 +20,7 @@ from apps.common.dates import format_display_date
 from apps.common.services.exchange_rates import get_usd_conversion_rate
 from apps.common.models import ExchangeRateHistory
 from apps.common.services.ledger import TRANSFER_LEG_METADATA_KEY, TRANSFER_PAIR_METADATA_KEY
+from apps.common.services.bynex_trades import is_cash_like_product
 from apps.imports.models import ImportJob
 from apps.institutions.models import FinancialInstitution
 from apps.products.analytics import (
@@ -37,6 +38,7 @@ from apps.dashboard.services.period_attribution import (
     FlowTotals,
     PeriodFlowLedger,
     build_period_flow_ledger,
+    is_deposit_reducing_fee,
 )
 
 PORTFOLIO_CHART_RANGES = {
@@ -402,9 +404,29 @@ class CashFlowTotals:
 	as_of_date: date
 
 
+INTERNAL_CASH_FLOW_OPERATION_KINDS = frozenset({
+	'spot_buy_credit',
+	'incoming_from_bynex',
+})
+
+
 def _is_internal_transfer_leg(transaction: Transaction) -> bool:
 	metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
 	return bool(metadata.get(TRANSFER_PAIR_METADATA_KEY) and metadata.get(TRANSFER_LEG_METADATA_KEY))
+
+
+def _is_internal_cash_flow(transaction: Transaction) -> bool:
+	"""USD→USDT conversion and BYNEX↔Binance moves stay inside the portfolio."""
+	if _is_internal_transfer_leg(transaction):
+		return True
+	metadata = transaction.metadata if isinstance(transaction.metadata, dict) else {}
+	if metadata.get('operation_kind') in INTERNAL_CASH_FLOW_OPERATION_KINDS:
+		return True
+	return (
+		transaction.transaction_type == Transaction.TransactionType.TRANSFER
+		and metadata.get('source') == 'bynex'
+		and str(metadata.get('destination') or '').strip().casefold() == 'binance'
+	)
 
 
 def _transaction_flow_usd(transaction: Transaction, rate_cache: dict) -> Decimal:
@@ -421,7 +443,7 @@ def _transaction_flow_usd(transaction: Transaction, rate_cache: dict) -> Decimal
 
 def _transaction_cash_flow_usd(transaction: Transaction, rate_cache: dict) -> tuple[Decimal, Decimal]:
 	"""Return (deposits_usd, withdrawals_usd) as positive magnitudes."""
-	if _is_internal_transfer_leg(transaction):
+	if _is_internal_cash_flow(transaction):
 		return Decimal('0'), Decimal('0')
 
 	amount = transaction.amount or Decimal('0')
@@ -437,6 +459,8 @@ def _transaction_cash_flow_usd(transaction: Transaction, rate_cache: dict) -> tu
 			return abs(usd), Decimal('0')
 		if amount < 0:
 			return Decimal('0'), abs(usd)
+	if is_deposit_reducing_fee(transaction):
+		return -abs(usd), Decimal('0')
 	return Decimal('0'), Decimal('0')
 
 
@@ -459,6 +483,7 @@ def _build_deposit_withdrawal_totals(as_of_date: date | None = None) -> CashFlow
 			Transaction.TransactionType.DEPOSIT,
 			Transaction.TransactionType.WITHDRAWAL,
 			Transaction.TransactionType.TRANSFER,
+			Transaction.TransactionType.FEE,
 		],
 	).select_related('currency')
 
@@ -471,9 +496,9 @@ def _build_deposit_withdrawal_totals(as_of_date: date | None = None) -> CashFlow
 			month_withdrawals += withdrawals_usd
 
 	return CashFlowTotals(
-		month_deposits_usd=month_deposits,
+		month_deposits_usd=max(Decimal('0'), month_deposits),
 		month_withdrawals_usd=month_withdrawals,
-		year_deposits_usd=year_deposits,
+		year_deposits_usd=max(Decimal('0'), year_deposits),
 		year_withdrawals_usd=year_withdrawals,
 		as_of_date=as_of_date,
 	)
@@ -1082,6 +1107,8 @@ def _product_value_as_of(
     transaction_map: dict[int, list[Transaction]] | None = None,
     portfolio_cache: PortfolioHistoryCache | None = None,
 ) -> Decimal:
+    if is_cash_like_product(product):
+        return Decimal('0')
     if portfolio_cache is not None:
         rate = _usd_rate_from_cache(
             product.currency,

@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from apps.accounts.models import Transaction
 from apps.accounts.services.balance import transaction_affects_account_balance
+from apps.common.services.bynex_trades import BYNEX_CASH_ASSETS, is_cash_like_product
 
 
 ZERO = Decimal('0')
@@ -25,6 +26,7 @@ class FlowLeg:
     entity_type: str
     entity_id: int
     signed_usd: Decimal
+    nets_against_deposits: bool = False
 
 
 @dataclass
@@ -41,6 +43,7 @@ class PeriodFlowLedger:
         product_scope = set(product_ids)
         event_totals: dict[str, Decimal] = defaultdict(lambda: ZERO)
 
+        fee_events: set[str] = set()
         for leg in self.legs:
             is_in_scope = (
                 leg.entity_type == 'account'
@@ -50,9 +53,21 @@ class PeriodFlowLedger:
             )
             if is_in_scope:
                 event_totals[leg.event_key] += leg.signed_usd
+                if leg.nets_against_deposits:
+                    fee_events.add(leg.event_key)
 
-        contributions = sum((value for value in event_totals.values() if value > 0), ZERO)
-        withdrawals = sum((-value for value in event_totals.values() if value < 0), ZERO)
+        contributions = ZERO
+        withdrawals = ZERO
+        fee_reductions = ZERO
+        for event_key, value in event_totals.items():
+            if event_key in fee_events and value < 0:
+                fee_reductions += -value
+            elif value > 0:
+                contributions += value
+            elif value < 0:
+                withdrawals += -value
+        if fee_reductions:
+            contributions -= min(contributions, fee_reductions)
         return FlowTotals(contributions_usd=contributions, withdrawals_usd=withdrawals)
 
 
@@ -68,6 +83,11 @@ def _event_key(transaction: Transaction) -> str:
     return f'transaction:{transaction.id}'
 
 
+INTERNAL_WALLET_CONVERSION_KINDS = frozenset({
+    'spot_buy_credit',
+})
+
+
 def _is_capitalized_income(transaction: Transaction) -> bool:
     if transaction.transaction_type != Transaction.TransactionType.INCOME:
         return False
@@ -78,8 +98,50 @@ def _is_capitalized_income(transaction: Transaction) -> bool:
     )
 
 
+def _is_cash_like_asset(value: str) -> bool:
+    return (value or '').strip().upper() in BYNEX_CASH_ASSETS
+
+
+def is_deposit_reducing_fee(transaction: Transaction) -> bool:
+    """Network/transfer fees reduce Deposit totals instead of counting as Withdrawal."""
+    if transaction.transaction_type != Transaction.TransactionType.FEE:
+        return False
+    metadata = _metadata(transaction)
+    return metadata.get('source') == 'bynex'
+
+
+def _is_internal_wallet_conversion(transaction: Transaction) -> bool:
+    metadata = _metadata(transaction)
+    if metadata.get('operation_kind') in INTERNAL_WALLET_CONVERSION_KINDS:
+        return True
+    if metadata.get('operation_kind') == 'incoming_from_bynex':
+        return True
+    if (
+        transaction.transaction_type == Transaction.TransactionType.TRADE
+        and (
+            _is_cash_like_asset(str(metadata.get('base_asset') or ''))
+            or _is_cash_like_product_leg(transaction)
+        )
+    ):
+        return True
+    if (
+        transaction.transaction_type == Transaction.TransactionType.TRANSFER
+        and metadata.get('source') == 'bynex'
+        and str(metadata.get('destination') or '').strip().casefold() == 'binance'
+    ):
+        return True
+    return False
+
+
+def _is_cash_like_product_leg(transaction: Transaction) -> bool:
+    metadata = _metadata(transaction)
+    if _is_cash_like_asset(str(metadata.get('asset') or metadata.get('base_asset') or '')):
+        return True
+    return is_cash_like_product(getattr(transaction, 'product', None))
+
+
 def _account_signed_flow(transaction: Transaction, magnitude_usd: Decimal) -> Decimal:
-    if not magnitude_usd or _is_capitalized_income(transaction):
+    if not magnitude_usd or _is_capitalized_income(transaction) or _is_internal_wallet_conversion(transaction):
         return ZERO
 
     tx_type = transaction.transaction_type
@@ -121,7 +183,12 @@ def _account_signed_flow(transaction: Transaction, magnitude_usd: Decimal) -> De
 
 
 def _product_signed_flow(transaction: Transaction, magnitude_usd: Decimal) -> Decimal:
-    if not transaction.product_id or not magnitude_usd or _is_capitalized_income(transaction):
+    if (
+        not transaction.product_id
+        or not magnitude_usd
+        or _is_capitalized_income(transaction)
+        or _is_cash_like_product_leg(transaction)
+    ):
         return ZERO
 
     tx_type = transaction.transaction_type
@@ -168,6 +235,7 @@ def build_period_flow_ledger(
         if not magnitude_usd:
             continue
         event_key = _event_key(transaction)
+        nets_against_deposits = is_deposit_reducing_fee(transaction)
 
         if transaction.account_id in account_scope:
             signed_account_flow = _account_signed_flow(transaction, magnitude_usd)
@@ -178,6 +246,7 @@ def build_period_flow_ledger(
                         entity_type='account',
                         entity_id=transaction.account_id,
                         signed_usd=signed_account_flow,
+                        nets_against_deposits=nets_against_deposits,
                     )
                 )
 
@@ -190,6 +259,7 @@ def build_period_flow_ledger(
                         entity_type='product',
                         entity_id=transaction.product_id,
                         signed_usd=signed_product_flow,
+                        nets_against_deposits=nets_against_deposits,
                     )
                 )
 

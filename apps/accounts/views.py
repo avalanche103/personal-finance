@@ -5,14 +5,26 @@ from django.core.paginator import Paginator
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from apps.accounts.analytics import build_account_groups
-from apps.accounts.forms import AccountForm, TransactionForm
+from apps.accounts.forms import (
+    AccountForm,
+    AlfaAigenisTransferForm,
+    BynexBinanceTransferForm,
+    BynexTradeForm,
+    TransactionForm,
+)
 from apps.accounts.models import Account, Transaction
 from apps.accounts.querysets import visible_account_queryset
+from apps.accounts.services.shortcuts import (
+    record_alfa_to_aigenis_transfer,
+    record_bynex_to_binance_transfer,
+    record_bynex_usdt_buy,
+)
 from apps.common.services.ledger import delete_transaction
 from apps.products.models import Product
 
@@ -188,20 +200,95 @@ def _apply_transaction_create_prefill(form, request):
     return product
 
 
+def _institution_shortcut_actions(institution):
+    slug = getattr(institution, 'slug', '') or ''
+    if slug == 'bynex':
+        return [
+            {
+                'label': 'Add trade',
+                'url': reverse('accounts:bynex_trade_create'),
+                'style': 'primary',
+            },
+            {
+                'label': 'Add transfer to Binance',
+                'url': reverse('accounts:bynex_binance_transfer_create'),
+                'style': 'secondary',
+            },
+        ]
+    if slug == 'alfabank':
+        return [
+            {
+                'label': 'Add transfer to Aigenis',
+                'url': reverse('accounts:alfa_aigenis_transfer_create'),
+                'style': 'primary',
+            },
+        ]
+    return []
+
+
+def _with_shortcut_actions(account_groups):
+    for group in account_groups:
+        group['shortcut_actions'] = _institution_shortcut_actions(group.get('institution'))
+    return account_groups
+
+
+def _shortcut_datetime_initial():
+    return timezone.localtime().replace(second=0, microsecond=0)
+
+
+def _shortcut_form_view(request, *, form_class, title, submit_label, handler, success_message):
+    initial = {}
+    if request.method != 'POST':
+        initial['occurred_at'] = _shortcut_datetime_initial()
+    form = form_class(request.POST or None, initial=initial)
+    back_href = _accounts_url_with_transactions(request)
+    if request.method == 'POST' and form.is_valid():
+        try:
+            handler(form.cleaned_data)
+        except ValueError as exc:
+            form.add_error(None, str(exc))
+        else:
+            messages.success(request, success_message)
+            return redirect(back_href)
+    return render(
+        request,
+        'accounts/form.html',
+        {
+            'form': form,
+            'title': title,
+            'eyebrow': 'Ledger entry',
+            'submit_label': submit_label,
+            'back_url': 'accounts:list',
+            'back_label': 'Back to accounts',
+            'back_href': back_href,
+        },
+    )
+
+
 def account_list(request):
     query = request.GET.get('q', '').strip()
     accounts = visible_account_queryset()
+    shortcut_accounts = Account.objects.select_related('institution', 'currency').filter(
+        institution__slug__in=['bynex', 'alfabank']
+    )
     if query:
-        accounts = accounts.filter(
+        search_filter = (
             Q(name__icontains=query)
             | Q(account_type__icontains=query)
             | Q(institution__name__icontains=query)
             | Q(currency__code__icontains=query)
         )
+        accounts = accounts.filter(search_filter)
+        shortcut_accounts = shortcut_accounts.filter(search_filter)
 
-    ordered_accounts = accounts.order_by('institution__name', 'currency__code', 'name')
+    account_ids = set(accounts.values_list('pk', flat=True)) | set(shortcut_accounts.values_list('pk', flat=True))
+    ordered_accounts = (
+        Account.objects.filter(pk__in=account_ids)
+        .select_related('institution', 'currency')
+        .order_by('institution__name', 'currency__code', 'name')
+    )
     context = {
-        'account_groups': build_account_groups(ordered_accounts),
+        'account_groups': _with_shortcut_actions(build_account_groups(ordered_accounts)),
         'query': query,
     }
     template_name = 'accounts/partials/table.html' if request.headers.get('HX-Request') == 'true' else 'accounts/list.html'
@@ -227,6 +314,51 @@ def account_create(request):
             'submit_label': 'Create account',
             'back_url': 'accounts:list',
         },
+    )
+
+
+def bynex_trade_create(request):
+    return _shortcut_form_view(
+        request,
+        form_class=BynexTradeForm,
+        title='Add BYNEX trade',
+        submit_label='Create trade',
+        handler=lambda data: record_bynex_usdt_buy(
+            usd_spent=data['usd_spent'],
+            usdt_received=data['usdt_received'],
+            occurred_at=data['occurred_at'],
+        ),
+        success_message='BYNEX USD → USDT trade created.',
+    )
+
+
+def bynex_binance_transfer_create(request):
+    return _shortcut_form_view(
+        request,
+        form_class=BynexBinanceTransferForm,
+        title='Add transfer to Binance',
+        submit_label='Create transfer',
+        handler=lambda data: record_bynex_to_binance_transfer(
+            quantity=data['quantity'],
+            fee=data['fee'] or 0,
+            occurred_at=data['occurred_at'],
+        ),
+        success_message='USDT transfer from BYNEX to Binance created.',
+    )
+
+
+def alfa_aigenis_transfer_create(request):
+    return _shortcut_form_view(
+        request,
+        form_class=AlfaAigenisTransferForm,
+        title='Add transfer to Aigenis',
+        submit_label='Create transfer',
+        handler=lambda data: record_alfa_to_aigenis_transfer(
+            amount=data['amount'],
+            fee=data['fee'] or 0,
+            occurred_at=data['occurred_at'],
+        ),
+        success_message='BYN transfer from АльфаБанк to Aigenis created.',
     )
 
 

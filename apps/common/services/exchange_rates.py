@@ -41,7 +41,7 @@ def get_usd_conversion_rate(currency: Currency, target_date: date, rate_cache: d
 	if cache_key in rate_cache:
 		return rate_cache[cache_key]
 
-	if currency.code == 'USD':
+	if currency.code == 'USD' or currency.code in {'USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI'}:
 		rate_cache[cache_key] = Decimal('1')
 		return rate_cache[cache_key]
 

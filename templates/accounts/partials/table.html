@@ -1,5 +1,5 @@
 {% for group in account_groups %}
-    <details class="account-group" {% if forloop.first %}open{% endif %}>
+    <details class="account-group" {% if forloop.first or group.shortcut_actions %}open{% endif %}>
         <summary>
             <div>
                 <strong>{{ group.label }}</strong>
@@ -9,6 +9,17 @@
                 {% include 'accounts/partials/group_summary_metrics.html' %}
             </div>
         </summary>
+
+        {% if group.shortcut_actions %}
+            <div class="account-group-actions">
+                {% for action in group.shortcut_actions %}
+                    <a
+                        class="button{% if action.style == 'secondary' %} button-secondary{% endif %}"
+                        href="{{ action.url }}"
+                    >{{ action.label }}</a>
+                {% endfor %}
+            </div>
+        {% endif %}
 
         <div class="table-wrap">
             <table class="data-table">

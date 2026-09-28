@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django import forms
 from django.utils import timezone
 
@@ -7,6 +9,22 @@ from apps.accounts.models import Account, Transaction
 from apps.accounts.querysets import portfolio_account_queryset
 from apps.products.models import Product
 from apps.common.services.ledger import create_account, create_transaction, update_transaction
+
+
+def _shortcut_datetime_field(label: str = 'Дата и время') -> forms.DateTimeField:
+	return forms.DateTimeField(
+		label=label,
+		widget=forms.DateTimeInput(
+			format='%Y-%m-%dT%H:%M',
+			attrs={'type': 'datetime-local'},
+		),
+		input_formats=['%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S'],
+	)
+
+
+def _style_form_fields(form: forms.Form) -> None:
+	for field in form.fields.values():
+		field.widget.attrs.setdefault('class', 'form-control')
 
 
 class AccountForm(forms.ModelForm):
@@ -166,3 +184,79 @@ class TransactionForm(forms.ModelForm):
 				}
 			return update_transaction(self.instance, **{**self.cleaned_data, 'metadata': metadata})
 		return create_transaction(**self.cleaned_data)
+
+
+class BynexTradeForm(forms.Form):
+	usd_spent = forms.DecimalField(
+		label='Потрачено USD',
+		min_value=Decimal('0.01'),
+		decimal_places=2,
+		max_digits=20,
+		help_text='Сумма USD, списанная с BYNEX, с учётом курса и комиссий.',
+	)
+	usdt_received = forms.DecimalField(
+		label='Получено USDT',
+		min_value=Decimal('0.000001'),
+		decimal_places=6,
+		max_digits=20,
+		help_text='Сколько USDT зачислилось после обмена.',
+	)
+	occurred_at = _shortcut_datetime_field()
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		_style_form_fields(self)
+
+
+class BynexBinanceTransferForm(forms.Form):
+	quantity = forms.DecimalField(
+		label='Сумма USDT',
+		min_value=Decimal('0.000001'),
+		decimal_places=6,
+		max_digits=20,
+		help_text='Сколько USDT пришло на Binance, без комиссии.',
+	)
+	fee = forms.DecimalField(
+		label='Комиссия',
+		min_value=Decimal('0'),
+		decimal_places=6,
+		max_digits=20,
+		initial=Decimal('0'),
+		required=False,
+		help_text='Комиссия сети или биржи в USDT.',
+	)
+	occurred_at = _shortcut_datetime_field()
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		_style_form_fields(self)
+
+	def clean_fee(self):
+		return self.cleaned_data.get('fee') or Decimal('0')
+
+
+class AlfaAigenisTransferForm(forms.Form):
+	amount = forms.DecimalField(
+		label='Сумма BYN',
+		min_value=Decimal('0.01'),
+		decimal_places=2,
+		max_digits=20,
+		help_text='Сколько BYN зачислилось на Aigenis.',
+	)
+	fee = forms.DecimalField(
+		label='Комиссия',
+		min_value=Decimal('0'),
+		decimal_places=2,
+		max_digits=20,
+		initial=Decimal('0'),
+		required=False,
+		help_text='Комиссия банка Альфа, списывается отдельно.',
+	)
+	occurred_at = _shortcut_datetime_field()
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		_style_form_fields(self)
+
+	def clean_fee(self):
+		return self.cleaned_data.get('fee') or Decimal('0')
