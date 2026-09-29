@@ -365,3 +365,69 @@ class Op51IndexedBondTests(TestCase):
 		self.assertEqual(fx_market_value_usd, Decimal('427.96'))
 		self.assertEqual(fx_performance['total_return_value'], baseline_performance['total_return_value'])
 		self.assertLess(baseline_performance['total_return_value'], Decimal('0'))
+
+
+class Op55IndexedBondTests(TestCase):
+	def setUp(self):
+		self.byn = Currency.objects.create(code='BYN', name='Belarusian Ruble', symbol='Br', usd_rate=Decimal('0.33'))
+		self.usd = Currency.objects.create(code='USD', name='US Dollar', symbol='$', usd_rate=Decimal('1'), is_base=True)
+		ExchangeRateHistory.objects.create(
+			currency=self.usd,
+			rate_date=date(2026, 9, 29),
+			rate_byn=Decimal('3.0300'),
+			usd_cross_rate=Decimal('1'),
+			source=ExchangeRateHistory.Source.NBRB,
+			source_currency_id=145,
+		)
+		self.aigenis = FinancialInstitution.objects.create(name='Aigenis', slug='aigenis-op55', institution_type='broker')
+		self.alfabank = FinancialInstitution.objects.create(name='АльфаБанк', slug='alfabank-op55', institution_type='bank')
+		self.income_account = Account.objects.create(
+			institution=self.alfabank,
+			name='АльфаБанк BYN Account',
+			account_type=Account.AccountType.BANK,
+			currency=self.byn,
+			current_balance=Decimal('0.00'),
+		)
+		self.product = Product.objects.create(
+			institution=self.aigenis,
+			name='Айгенис Оп55',
+			external_id='BCSE-00518-P03',
+			isin='BCSE-00518-P03',
+			product_type=Product.ProductType.BOND,
+			currency=self.byn,
+			units=Decimal('3'),
+			current_price=Decimal('300'),
+			income_account=self.income_account,
+			metadata={'bond_kind': 'indexed'},
+		)
+
+	def test_configure_op55_sets_terms_and_full_calendar(self):
+		from apps.common.services.indexed_bonds import configure_op55_bond
+
+		configure_op55_bond(self.product)
+		self.product.refresh_from_db()
+
+		self.assertEqual(self.product.annual_rate_pct, Decimal('6.5000'))
+		self.assertEqual(self.product.maturity_date, date(2034, 9, 4))
+		self.assertEqual(self.product.income_schedule, Product.IncomeSchedule.QUARTERLY)
+		self.assertEqual(self.product.next_income_date, date(2026, 12, 4))
+		self.assertEqual(self.product.metadata['face_value_usd'], '99.2457')
+		self.assertEqual(self.product.metadata['placement_fx_rate'], '3.0228')
+		self.assertEqual(self.product.metadata['income_calendar']['coupon_day'], 4)
+
+		dates = generate_coupon_payment_dates(self.product)
+		self.assertEqual(dates[0], date(2026, 12, 4))
+		self.assertEqual(dates[-1], date(2034, 9, 4))
+		self.assertEqual(len(dates), 32)
+		self.assertEqual(dates[3], date(2027, 9, 6))  # Sat 2027-09-04 -> Mon
+
+		rows = build_income_calendar_rows(self.product, today=date(2026, 9, 29))
+		self.assertEqual(rows[0]['date'], date(2026, 12, 4))
+		self.assertEqual(rows[0]['coupon_usd_per_unit'], Decimal('1.3786'))
+		self.assertEqual(rows[-1]['coupon_usd_per_unit'], Decimal('1.6260'))
+		self.assertTrue(rows[-1]['is_maturity_coupon'])
+
+		refresh_indexed_bond_valuation(self.product)
+		self.product.refresh_from_db()
+		self.assertEqual(self.product.current_value_usd, Decimal('297.74'))
+		self.assertEqual(self.product.current_price, Decimal('300.71447100'))

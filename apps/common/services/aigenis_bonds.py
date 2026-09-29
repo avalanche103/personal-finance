@@ -9,6 +9,7 @@ from apps.products.models import Product
 AIGENIS_INDEXED_BOND_ISINS = frozenset({
 	'BCSE-00477-P01',
 	'BCSE-00487-P02',
+	'BCSE-00518-P03',
 })
 
 
@@ -43,14 +44,16 @@ def apply_aigenis_indexed_bond_defaults(product: Product, *, save: bool = True) 
 		return False
 
 	income_account = get_alfabank_byn_account()
-	if income_account is not None:
+	needs_income_save = False
+	if income_account is not None and product.income_account_id != income_account.id:
 		product.income_account = income_account
+		needs_income_save = True
 
 	from apps.common.services.indexed_bonds import configure_aigenis_indexed_bond
 
 	if not save:
 		return configure_aigenis_indexed_bond(product, preserve_user_payments=True)
-	if income_account is not None and product.income_account_id != income_account.id:
+	if needs_income_save:
 		product.save(update_fields=['income_account', 'updated_at'])
 	return configure_aigenis_indexed_bond(product, preserve_user_payments=True)
 

@@ -107,6 +107,63 @@ OP51_METADATA = {
 	},
 }
 
+OP55_ISIN = 'BCSE-00518-P03'
+
+OP55_TERMS = {
+	'annual_rate_pct': Decimal('6.5000'),
+	'maturity_date': date(2034, 9, 4),
+	'income_schedule': Product.IncomeSchedule.QUARTERLY,
+	'next_income_date': date(2026, 12, 4),
+}
+
+OP55_PROSPECTUS_PAYMENTS = {
+	'2026-12-04': '1.3786',
+	'2027-03-04': '1.5907',
+	'2027-06-04': '1.6260',
+	'2027-09-04': '1.6260',
+	'2027-12-04': '1.6083',
+	'2028-03-04': '1.6052',
+	'2028-06-04': '1.6216',
+	'2028-09-04': '1.6216',
+	'2028-12-04': '1.6039',
+	'2029-03-04': '1.5893',
+	'2029-06-04': '1.6260',
+	'2029-09-04': '1.6260',
+	'2029-12-04': '1.6083',
+	'2030-03-04': '1.5907',
+	'2030-06-04': '1.6260',
+	'2030-09-04': '1.6260',
+	'2030-12-04': '1.6083',
+	'2031-03-04': '1.5907',
+	'2031-06-04': '1.6260',
+	'2031-09-04': '1.6260',
+	'2031-12-04': '1.6083',
+	'2032-03-04': '1.6052',
+	'2032-06-04': '1.6216',
+	'2032-09-04': '1.6216',
+	'2032-12-04': '1.6039',
+	'2033-03-04': '1.5893',
+	'2033-06-04': '1.6260',
+	'2033-09-04': '1.6260',
+	'2033-12-04': '1.6083',
+	'2034-03-04': '1.5907',
+	'2034-06-04': '1.6260',
+	'2034-09-04': '1.6260',
+}
+
+OP55_METADATA = {
+	'face_value_byn': '300',
+	'face_value_usd': '99.2457',
+	'placement_fx_rate': '3.0228',
+	'income_calendar': {
+		'enabled': True,
+		'coupon_day': 4,
+		'schedule_start_date': '2026-12-04',
+		'income_date_adjustment': 'following_weekday',
+		'payments': OP55_PROSPECTUS_PAYMENTS,
+	},
+}
+
 
 def is_indexed_bond(product: Product) -> bool:
 	return (
@@ -539,6 +596,33 @@ def merge_op51_metadata(metadata: dict) -> dict:
 	return merged
 
 
+def merge_op55_metadata(metadata: dict) -> dict:
+	merged = dict(metadata or {})
+	for key, value in OP55_METADATA.items():
+		if key == 'income_calendar':
+			continue
+		merged[key] = value
+
+	existing_calendar = merged.get('income_calendar')
+	if not isinstance(existing_calendar, dict):
+		existing_calendar = {}
+	default_calendar = dict(OP55_METADATA['income_calendar'])
+	existing_payments = existing_calendar.get('payments')
+	if not isinstance(existing_payments, dict):
+		existing_payments = {}
+	merged['income_calendar'] = {
+		**default_calendar,
+		**existing_calendar,
+		'payments': {
+			**OP55_PROSPECTUS_PAYMENTS,
+			**existing_payments,
+		},
+		'income_date_adjustment': 'following_weekday',
+	}
+	merged['bond_kind'] = 'indexed'
+	return merged
+
+
 def configure_op51_bond(product: Product, *, preserve_user_payments: bool = True) -> bool:
 	product_key = product.external_id or product.isin
 	if product_key != OP51_ISIN:
@@ -572,12 +656,47 @@ def configure_op51_bond(product: Product, *, preserve_user_payments: bool = True
 	return True
 
 
+def configure_op55_bond(product: Product, *, preserve_user_payments: bool = True) -> bool:
+	product_key = product.external_id or product.isin
+	if product_key != OP55_ISIN:
+		return False
+
+	metadata = dict(product.metadata or {})
+	if preserve_user_payments:
+		metadata = merge_op55_metadata(metadata)
+	else:
+		metadata.update(OP55_METADATA)
+		metadata['bond_kind'] = 'indexed'
+
+	product.annual_rate_pct = OP55_TERMS['annual_rate_pct']
+	product.maturity_date = OP55_TERMS['maturity_date']
+	product.income_schedule = OP55_TERMS['income_schedule']
+	product.next_income_date = OP55_TERMS['next_income_date']
+	product.metadata = metadata
+	product.terms_updated_at = timezone.now()
+	product.save(
+		update_fields=[
+			'annual_rate_pct',
+			'maturity_date',
+			'income_schedule',
+			'next_income_date',
+			'metadata',
+			'terms_updated_at',
+			'updated_at',
+		]
+	)
+	refresh_indexed_bond_valuation(product)
+	return True
+
+
 def configure_aigenis_indexed_bond(product: Product, *, preserve_user_payments: bool = True) -> bool:
 	product_key = product.external_id or product.isin
 	if product_key == OP47_ISIN:
 		return configure_op47_bond(product, preserve_user_payments=preserve_user_payments)
 	if product_key == OP51_ISIN:
 		return configure_op51_bond(product, preserve_user_payments=preserve_user_payments)
+	if product_key == OP55_ISIN:
+		return configure_op55_bond(product, preserve_user_payments=preserve_user_payments)
 	return False
 
 
